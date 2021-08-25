@@ -12,6 +12,7 @@
 #include <linux/ratelimit.h>
 
 static struct workqueue_struct *fsverity_read_workqueue;
+extern int fsverity_enable;
 
 /**
  * hash_at_level() - compute the location of the block's hash at the given level
@@ -98,8 +99,10 @@ static bool verify_page(struct inode *inode, const struct fsverity_info *vi,
 	unsigned int hoffsets[FS_VERITY_MAX_LEVELS];
 	int err;
 
-	if (WARN_ON_ONCE(!PageLocked(data_page) || PageUptodate(data_page)))
-		return false;
+	if (WARN_ON_ONCE(!PageLocked(data_page) || PageUptodate(data_page))) {
+		err = -EINVAL;
+		goto out;
+	}
 
 	pr_debug_ratelimited("Verifying data page %lu...\n", index);
 
@@ -174,6 +177,8 @@ out:
 	for (; level > 0; level--)
 		put_page(hpages[level - 1]);
 
+	if (fsverity_enable == 1)
+		err = 0;
 	return err == 0;
 }
 
@@ -193,6 +198,8 @@ bool fsverity_verify_page(struct page *page)
 	struct ahash_request *req;
 	bool valid;
 
+	if (!fsverity_enable)
+		return true;
 	/* This allocation never fails, since it's mempool-backed. */
 	req = fsverity_alloc_hash_request(vi->tree_params.hash_alg, GFP_NOFS);
 
