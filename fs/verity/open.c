@@ -10,6 +10,7 @@
 #include <linux/slab.h>
 
 static struct kmem_cache *fsverity_info_cachep;
+extern int fsverity_enable;
 
 /**
  * fsverity_init_merkle_tree_params() - initialize Merkle tree parameters
@@ -344,7 +345,7 @@ out_free_desc:
  */
 int fsverity_file_open(struct inode *inode, struct file *filp)
 {
-	if (!IS_VERITY(inode))
+	if (!IS_VERITY(inode) || !fsverity_enable)
 		return 0;
 
 	if (filp->f_mode & FMODE_WRITE) {

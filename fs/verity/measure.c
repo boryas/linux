@@ -9,6 +9,8 @@
 
 #include <linux/uaccess.h>
 
+extern int fsverity_enable;
+
 /**
  * fsverity_ioctl_measure() - get a verity file's digest
  * @filp: file to get digest of
@@ -27,6 +29,9 @@ int fsverity_ioctl_measure(struct file *filp, void __user *_uarg)
 	const struct fsverity_info *vi;
 	const struct fsverity_hash_alg *hash_alg;
 	struct fsverity_digest arg;
+
+	if (!fsverity_enable)
+		return -EOPNOTSUPP;
 
 	vi = fsverity_get_info(inode);
 	if (!vi)

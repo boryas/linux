@@ -14,6 +14,8 @@
 #include <linux/sched/signal.h>
 #include <linux/uaccess.h>
 
+extern int fsverity_enable;
+
 /*
  * Read a file data page for Merkle tree construction.  Do aggressive readahead,
  * since we're sequentially reading the entire file.
@@ -342,6 +344,9 @@ int fsverity_ioctl_enable(struct file *filp, const void __user *uarg)
 	struct inode *inode = file_inode(filp);
 	struct fsverity_enable_arg arg;
 	int err;
+
+	if (!fsverity_enable)
+		return -EOPNOTSUPP;
 
 	if (copy_from_user(&arg, uarg, sizeof(arg)))
 		return -EFAULT;
