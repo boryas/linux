@@ -802,6 +802,45 @@ static int btrfs_write_merkle_tree_block(struct inode *inode, const void *buf,
 			       off, buf, len);
 }
 
+void btrfs_init_verity_ctl(struct btrfs_fs_info *fs_info) {
+	atomic64_set(&fs_info->verity_ctl.verity_opened, 0);
+	atomic64_set(&fs_info->verity_ctl.verity_open_failed, 0);
+	atomic64_set(&fs_info->verity_ctl.verity_enabled, 0);
+	atomic64_set(&fs_info->verity_ctl.verity_enable_failed, 0);
+	atomic64_set(&fs_info->verity_ctl.verity_page_verified, 0);
+	atomic64_set(&fs_info->verity_ctl.verity_page_verify_failed, 0);
+}
+
+void btrfs_inc_verity_opened(struct btrfs_fs_info *fs_info)
+{
+	atomic64_inc(&fs_info->verity_ctl.verity_opened);
+}
+
+void btrfs_inc_verity_open_failed(struct btrfs_fs_info *fs_info)
+{
+	atomic64_inc(&fs_info->verity_ctl.verity_open_failed);
+}
+
+void btrfs_inc_verity_enabled(struct btrfs_fs_info *fs_info)
+{
+	atomic64_inc(&fs_info->verity_ctl.verity_enabled);
+}
+
+void btrfs_inc_verity_enable_failed(struct btrfs_fs_info *fs_info)
+{
+	atomic64_inc(&fs_info->verity_ctl.verity_enable_failed);
+}
+
+void btrfs_inc_verity_page_verified(struct btrfs_fs_info *fs_info)
+{
+	atomic64_inc(&fs_info->verity_ctl.verity_page_verified);
+}
+
+void btrfs_inc_verity_page_verify_failed(struct btrfs_fs_info *fs_info)
+{
+	atomic64_inc(&fs_info->verity_ctl.verity_page_verify_failed);
+}
+
 const struct fsverity_operations btrfs_verityops = {
 	.begin_enable_verity     = btrfs_begin_enable_verity,
 	.end_enable_verity       = btrfs_end_enable_verity,

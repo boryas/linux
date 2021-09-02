@@ -4838,6 +4838,7 @@ long btrfs_ioctl(struct file *file, unsigned int
 	struct btrfs_fs_info *fs_info = btrfs_sb(inode->i_sb);
 	struct btrfs_root *root = BTRFS_I(inode)->root;
 	void __user *argp = (void __user *)arg;
+	int err;
 
 	switch (cmd) {
 	case FS_IOC_GETVERSION:
@@ -4972,7 +4973,14 @@ long btrfs_ioctl(struct file *file, unsigned int
 	case BTRFS_IOC_INO_LOOKUP_USER:
 		return btrfs_ioctl_ino_lookup_user(file, argp);
 	case FS_IOC_ENABLE_VERITY:
-		return fsverity_ioctl_enable(file, (const void __user *)argp);
+	{
+		err = fsverity_ioctl_enable(file, (const void __user *)argp);
+		if (err)
+			btrfs_inc_verity_enable_failed(fs_info);
+		else
+			btrfs_inc_verity_enabled(fs_info);
+		return err;
+	}
 	case FS_IOC_MEASURE_VERITY:
 		return fsverity_ioctl_measure(file, argp);
 	}

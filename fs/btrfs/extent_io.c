@@ -2678,21 +2678,24 @@ static void end_page_read(struct page *page, bool uptodate, u64 start, u32 len)
 	ASSERT(page_offset(page) <= start &&
 	       start + len <= page_offset(page) + PAGE_SIZE);
 
-	if (uptodate) {
-		if (fsverity_active(page->mapping->host) &&
-		    !PageError(page) &&
-		    !PageUptodate(page) &&
-		    start < i_size_read(page->mapping->host) &&
-		    !fsverity_verify_page(page)) {
-			btrfs_page_set_error(fs_info, page, start, len);
-		} else {
-			btrfs_page_set_uptodate(fs_info, page, start, len);
-		}
-	} else {
+	if (!uptodate) {
 		btrfs_page_clear_uptodate(fs_info, page, start, len);
 		btrfs_page_set_error(fs_info, page, start, len);
+		goto out;
 	}
-
+	if (fsverity_active(page->mapping->host) &&
+	    !PageError(page) &&
+	    !PageUptodate(page) &&
+	    start < i_size_read(page->mapping->host)) {
+		if (!fsverity_verify_page(page)) {
+			btrfs_page_set_error(fs_info, page, start, len);
+			btrfs_inc_verity_page_verify_failed(fs_info);
+			goto out;
+		}
+		btrfs_inc_verity_page_verified(fs_info);
+	}
+	btrfs_page_set_uptodate(fs_info, page, start, len);
+out:
 	if (fs_info->sectorsize == PAGE_SIZE)
 		unlock_page(page);
 	else

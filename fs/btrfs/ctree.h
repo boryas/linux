@@ -503,6 +503,17 @@ struct btrfs_discard_ctl {
 	atomic64_t discard_bytes_saved;
 };
 
+#ifdef CONFIG_FS_VERITY
+struct btrfs_verity_ctl {
+	atomic64_t verity_opened;
+	atomic64_t verity_open_failed;
+	atomic64_t verity_enabled;
+	atomic64_t verity_enable_failed;
+	atomic64_t verity_page_verified;
+	atomic64_t verity_page_verify_failed;
+};
+#endif
+
 enum btrfs_orphan_cleanup_state {
 	ORPHAN_CLEANUP_STARTED	= 1,
 	ORPHAN_CLEANUP_DONE	= 2,
@@ -1033,6 +1044,10 @@ struct btrfs_fs_info {
 
 	spinlock_t eb_leak_lock;
 	struct list_head allocated_ebs;
+#endif
+#ifdef CONFIG_FS_VERITY
+	struct kobject *verity_kobj;
+	struct btrfs_verity_ctl verity_ctl;
 #endif
 };
 
@@ -3808,6 +3823,13 @@ static inline int btrfs_defrag_cancelled(struct btrfs_fs_info *fs_info)
 
 extern const struct fsverity_operations btrfs_verityops;
 int btrfs_drop_verity_items(struct btrfs_inode *inode);
+void btrfs_init_verity_ctl(struct btrfs_fs_info *fs_info);
+void btrfs_inc_verity_opened(struct btrfs_fs_info *fs_info);
+void btrfs_inc_verity_open_failed(struct btrfs_fs_info *fs_info);
+void btrfs_inc_verity_enabled(struct btrfs_fs_info *fs_info);
+void btrfs_inc_verity_enable_failed(struct btrfs_fs_info *fs_info);
+void btrfs_inc_verity_page_verified(struct btrfs_fs_info *fs_info);
+void btrfs_inc_verity_page_verify_failed(struct btrfs_fs_info *fs_info);
 
 BTRFS_SETGET_FUNCS(verity_descriptor_encryption, struct btrfs_verity_descriptor_item,
 		   encryption, 8);
@@ -3823,6 +3845,34 @@ BTRFS_SETGET_STACK_FUNCS(stack_verity_descriptor_size,
 static inline int btrfs_drop_verity_items(struct btrfs_inode *inode)
 {
 	return 0;
+}
+
+static inline void btrfs_init_verity_ctl(struct btrfs_fs_info *fs_info)
+{
+}
+
+static inline void btrfs_inc_verity_opened(struct btrfs_fs_info *fs_info)
+{
+}
+
+static inline void btrfs_inc_verity_open_failed(struct btrfs_fs_info *fs_info)
+{
+}
+
+static inline void btrfs_inc_verity_enabled(struct btrfs_fs_info *fs_info)
+{
+}
+
+static inline void btrfs_inc_verity_enable_failed(struct btrfs_fs_info *fs_info)
+{
+}
+
+static inline void btrfs_inc_verity_page_verified(struct btrfs_fs_info *fs_info)
+{
+}
+
+static inline void btrfs_inc_verity_page_verify_failed(struct btrfs_fs_info *fs_info)
+{
 }
 
 #endif

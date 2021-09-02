@@ -3621,8 +3621,12 @@ static int btrfs_file_open(struct inode *inode, struct file *filp)
 	filp->f_mode |= FMODE_NOWAIT | FMODE_BUF_RASYNC;
 
 	ret = fsverity_file_open(inode, filp);
-	if (ret)
+	if (ret) {
+		btrfs_inc_verity_open_failed(btrfs_sb(inode->i_sb));
 		return ret;
+	}
+	if (fsverity_active(inode))
+		btrfs_inc_verity_opened(btrfs_sb(inode->i_sb));
 	return generic_file_open(inode, filp);
 }
 

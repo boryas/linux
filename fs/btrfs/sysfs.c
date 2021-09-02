@@ -424,8 +424,89 @@ static const struct attribute_group btrfs_static_feature_attr_group = {
 	.attrs = btrfs_supported_static_feature_attrs,
 };
 
-#ifdef CONFIG_BTRFS_DEBUG
+#ifdef CONFIG_FS_VERITY
+/*
+ * Verity statistics
+ */
+#define verity_to_fs_info(_kobj)	to_fs_info((_kobj)->parent)
+static ssize_t btrfs_verity_enabled_show(struct kobject *kobj,
+						    struct kobj_attribute *a,
+						    char *buf)
+{
+	struct btrfs_fs_info *fs_info = verity_to_fs_info(kobj);
 
+	return scnprintf(buf, PAGE_SIZE, "%lld\n",
+			 atomic64_read(&fs_info->verity_ctl.verity_enabled));
+}
+BTRFS_ATTR(verity, enabled, btrfs_verity_enabled_show);
+
+static ssize_t btrfs_verity_enable_failed_show(struct kobject *kobj,
+						    struct kobj_attribute *a,
+						    char *buf)
+{
+	struct btrfs_fs_info *fs_info = verity_to_fs_info(kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%lld\n",
+			 atomic64_read(&fs_info->verity_ctl.verity_enable_failed));
+}
+BTRFS_ATTR(verity, enable_failed, btrfs_verity_enable_failed_show);
+
+static ssize_t btrfs_verity_opened_show(struct kobject *kobj,
+						    struct kobj_attribute *a,
+						    char *buf)
+{
+	struct btrfs_fs_info *fs_info = verity_to_fs_info(kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%lld\n",
+			 atomic64_read(&fs_info->verity_ctl.verity_opened));
+}
+BTRFS_ATTR(verity, opened, btrfs_verity_opened_show);
+
+static ssize_t btrfs_verity_open_failed_show(struct kobject *kobj,
+						    struct kobj_attribute *a,
+						    char *buf)
+{
+	struct btrfs_fs_info *fs_info = verity_to_fs_info(kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%lld\n",
+			 atomic64_read(&fs_info->verity_ctl.verity_open_failed));
+}
+BTRFS_ATTR(verity, open_failed, btrfs_verity_open_failed_show);
+
+static ssize_t btrfs_verity_page_verified_show(struct kobject *kobj,
+					       struct kobj_attribute *a,
+					       char *buf)
+{
+	struct btrfs_fs_info *fs_info = verity_to_fs_info(kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%lld\n",
+			 atomic64_read(&fs_info->verity_ctl.verity_page_verified));
+}
+BTRFS_ATTR(verity, page_verified, btrfs_verity_page_verified_show);
+
+static ssize_t btrfs_verity_page_verify_failed_show(struct kobject *kobj,
+						    struct kobj_attribute *a,
+						    char *buf)
+{
+	struct btrfs_fs_info *fs_info = verity_to_fs_info(kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%lld\n",
+			 atomic64_read(&fs_info->verity_ctl.verity_page_verify_failed));
+}
+BTRFS_ATTR(verity, page_verify_failed, btrfs_verity_page_verify_failed_show);
+
+static const struct attribute *verity_attrs[] = {
+	BTRFS_ATTR_PTR(verity, enabled),
+	BTRFS_ATTR_PTR(verity, enable_failed),
+	BTRFS_ATTR_PTR(verity, opened),
+	BTRFS_ATTR_PTR(verity, open_failed),
+	BTRFS_ATTR_PTR(verity, page_verified),
+	BTRFS_ATTR_PTR(verity, page_verify_failed),
+	NULL
+};
+#endif
+
+#ifdef CONFIG_BTRFS_DEBUG
 /*
  * Discard statistics and tunables
  */
@@ -1229,6 +1310,15 @@ void btrfs_sysfs_remove_mounted(struct btrfs_fs_info *fs_info)
 		kobject_put(fs_info->debug_kobj);
 	}
 #endif
+#ifdef CONFIG_VERITY
+	if (fs_info->verity_kobj) {
+		sysfs_remove_files(fs_info->verity_kobj,
+				   verity_attrs);
+		kobject_del(fs_info->verity_kobj);
+		kobject_put(fs_info->verity_kobj);
+	}
+#endif
+
 	addrm_unknown_feature_attrs(fs_info, false);
 	sysfs_remove_group(fsid_kobj, &btrfs_feature_attr_group);
 	sysfs_remove_files(fsid_kobj, btrfs_attrs);
@@ -1796,6 +1886,20 @@ int btrfs_sysfs_add_mounted(struct btrfs_fs_info *fs_info)
 
 	error = sysfs_create_files(fs_info->discard_debug_kobj,
 				   discard_debug_attrs);
+	if (error)
+		goto failure;
+#endif
+
+	/* Verity directory */
+#ifdef CONFIG_VERITY
+	fs_info->verity_kobj = kobject_create_and_add("verity", fsid_kobj);
+	if (!fs_info->verity_kobj) {
+		error = -ENOMEM;
+		goto failure;
+	}
+
+	error = sysfs_create_files(fs_info->verity_kobj,
+				   verity_attrs);
 	if (error)
 		goto failure;
 #endif
