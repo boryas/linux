@@ -15,6 +15,7 @@
 #include <linux/string.h>
 #include <linux/compat.h>
 #include <linux/crc32c.h>
+#include <linux/fsverity.h>
 
 #include "send.h"
 #include "backref.h"
@@ -4901,6 +4902,80 @@ out:
 	return ret;
 }
 
+static int send_verity(struct send_ctx *sctx, struct fs_path *path,
+		       struct fsverity_descriptor *desc)
+{
+	int ret;
+
+	btrfs_info("BO: send_verity %p %p %p\n", sctx, path, desc);
+
+	ret = begin_cmd(sctx, BTRFS_SEND_C_ENABLE_VERITY);
+	if (ret < 0)
+		goto out;
+
+	TLV_PUT_PATH(sctx, BTRFS_SEND_A_PATH, path);
+	ret = send_cmd(sctx);
+
+tlv_put_failure:
+out:
+	return ret;
+}
+
+static int process_new_verity(struct send_ctx *sctx)
+{
+	int ret = 0;
+	struct btrfs_fs_info *fs_info = sctx->send_root->fs_info;
+	struct inode *inode;
+	struct fsverity_descriptor *desc;
+	struct fs_path *p;
+
+	btrfs_info(fs_info, "BO: SEND: process_new_verity %llu", sctx->cur_ino);
+
+	inode = btrfs_iget(fs_info->sb, sctx->cur_ino, sctx->send_root);
+	if (IS_ERR(inode)) {
+		btrfs_err(fs_info, "BO: SEND: can't get verity inode %ld", PTR_ERR(inode));
+		return PTR_ERR(inode);
+	}
+
+	ret = fs_info->sb->s_vop->get_verity_descriptor(inode, NULL, 0);
+	if (ret < 0) {
+		btrfs_err(fs_info, "BO: SEND: can't get verity descriptor size %d", ret);
+		return ret;
+	}
+
+	if (ret > 16384) {
+		btrfs_err(fs_info, "BO: SEND: descriptor too big %d\n", ret);
+		return -EMSGSIZE;
+	}
+	desc = kmalloc(ret, GFP_KERNEL);
+	if (!desc)
+		return -ENOMEM;
+
+	ret = fs_info->sb->s_vop->get_verity_descriptor(inode, desc, ret);
+	if (ret < 0) {
+		btrfs_err(fs_info, "BO: SEND: can't get verity descriptor %d", ret);
+		kfree(desc);
+		return ret;
+	}
+	btrfs_info(fs_info, "BO: SEND: got a verity desc");
+
+	ret = get_cur_path(sctx, sctx->cur_ino, sctx->cur_inode_gen, p);
+	if (ret < 0) {
+		btrfs_err(fs_info, "BO: SEND: can't get file path %d", ret);
+		return ret;
+	}
+
+	ret = send_verity(sctx, p, desc);
+	if (ret < 0) {
+		btrfs_err(fs_info, "BO: SEND: couldn't send fsverity command %d", ret);
+		return ret;
+	}
+
+	fs_path_free(p);
+	kfree(desc);
+	return ret;
+}
+
 static inline u64 max_send_read_size(const struct send_ctx *sctx)
 {
 	return sctx->send_max_size - SZ_16K;
@@ -6515,6 +6590,18 @@ static int changed_extent(struct send_ctx *sctx,
 	return ret;
 }
 
+static int changed_verity(struct send_ctx *sctx,
+			  enum btrfs_compare_tree_result result)
+{
+	int ret = 0;
+
+	if (!sctx->cur_inode_new_gen && !sctx->cur_inode_deleted) {
+		if (result == BTRFS_COMPARE_TREE_NEW)
+			ret = process_new_verity(sctx);
+	}
+	return ret;
+}
+
 static int dir_changed(struct send_ctx *sctx, u64 dir)
 {
 	u64 orig_gen, new_gen;
@@ -6625,6 +6712,9 @@ static int changed_cb(struct btrfs_path *left_path,
 			ret = changed_xattr(sctx, result);
 		else if (key->type == BTRFS_EXTENT_DATA_KEY)
 			ret = changed_extent(sctx, result);
+		else if (key->type == BTRFS_VERITY_DESC_ITEM_KEY &&
+			 key->offset == 0)
+			ret = changed_verity(sctx, result);
 	}
 
 out:
