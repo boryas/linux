@@ -595,6 +595,8 @@ static int tlv_put(struct send_ctx *sctx, u16 attr, const void *data, int len)
 		return tlv_put(sctx, attr, &__tmp, sizeof(__tmp));	\
 	}
 
+TLV_PUT_DEFINE_INT(8)
+TLV_PUT_DEFINE_INT(32)
 TLV_PUT_DEFINE_INT(64)
 
 static int tlv_put_string(struct send_ctx *sctx, u16 attr,
@@ -4906,14 +4908,20 @@ static int send_verity(struct send_ctx *sctx, struct fs_path *path,
 		       struct fsverity_descriptor *desc)
 {
 	int ret;
+	struct btrfs_fs_info *fs_info = sctx->send_root->fs_info;
 
-	btrfs_info("BO: send_verity %p %p %p\n", sctx, path, desc);
+	btrfs_info(fs_info, "BO: send_verity %p %p %u %u %u %p %u %p\n", sctx, path, desc->hash_algorithm, 1 << desc->log_blocksize, desc->salt_size, desc->salt, desc->sig_size, desc->signature);
 
 	ret = begin_cmd(sctx, BTRFS_SEND_C_ENABLE_VERITY);
 	if (ret < 0)
 		goto out;
 
 	TLV_PUT_PATH(sctx, BTRFS_SEND_A_PATH, path);
+	TLV_PUT_U8(sctx, BTRFS_SEND_A_VERITY_ALGORITHM, desc->hash_algorithm);
+	TLV_PUT_U32(sctx, BTRFS_SEND_A_VERITY_BLOCK_SIZE, 1 << desc->log_blocksize);
+	TLV_PUT(sctx, BTRFS_SEND_A_VERITY_SALT_DATA, desc->salt, desc->salt_size);
+	TLV_PUT(sctx, BTRFS_SEND_A_VERITY_SIG_DATA, desc->signature, desc->sig_size);
+
 	ret = send_cmd(sctx);
 
 tlv_put_failure:
@@ -4959,6 +4967,9 @@ static int process_new_verity(struct send_ctx *sctx)
 	}
 	btrfs_info(fs_info, "BO: SEND: got a verity desc");
 
+	p = fs_path_alloc();
+	if (!p)
+		return -ENOMEM;
 	ret = get_cur_path(sctx, sctx->cur_ino, sctx->cur_inode_gen, p);
 	if (ret < 0) {
 		btrfs_err(fs_info, "BO: SEND: can't get file path %d", ret);
