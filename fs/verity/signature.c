@@ -45,9 +45,9 @@ int fsverity_verify_signature(const struct fsverity_info *vi,
 		if (fsverity_require_signatures) {
 			fsverity_err(inode,
 				     "require_signatures=1, rejecting unsigned file!");
-			return -EPERM;
+			err = fsverity_enforced() ? -EPERM : 0;
 		}
-		return 0;
+		return err;
 	}
 
 	d = kzalloc(sizeof(*d) + hash_alg->digest_size, GFP_KERNEL);
@@ -75,6 +75,8 @@ int fsverity_verify_signature(const struct fsverity_info *vi,
 		else
 			fsverity_err(inode, "Error %d verifying file signature",
 				     err);
+		if (!fsverity_enforced())
+			err = 0;
 		return err;
 	}
 
@@ -86,7 +88,6 @@ int fsverity_verify_signature(const struct fsverity_info *vi,
 int __init fsverity_init_signature(void)
 {
 	struct key *ring;
-	int err;
 
 	ring = keyring_alloc(".fs-verity", KUIDT_INIT(0), KGIDT_INIT(0),
 			     current_cred(), KEY_POS_SEARCH |

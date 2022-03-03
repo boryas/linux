@@ -12,8 +12,6 @@
 #include <linux/sched/signal.h>
 #include <linux/uaccess.h>
 
-extern int fsverity_enable;
-
 static int fsverity_read_merkle_tree(struct inode *inode,
 				     const struct fsverity_info *vi,
 				     void __user *buf, u64 offset, int length)
@@ -159,8 +157,8 @@ int fsverity_ioctl_read_metadata(struct file *filp, const void __user *uarg)
 	int length;
 	void __user *buf;
 
-	if (!fsverity_enable)
-		return -EOPNOTSUPP;
+	if (fsverity_disabled())
+		return -EPERM;
 
 	vi = fsverity_get_info(inode);
 	if (!vi)

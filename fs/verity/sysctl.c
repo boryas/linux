@@ -4,7 +4,6 @@
 
 #include <linux/sysctl.h>
 
-static int two = 2;
 /*
  * /proc/sys/fs/verity/require_signatures
  * If 1, all verity files must have a valid builtin signature.
@@ -17,7 +16,14 @@ int fsverity_require_signatures;
  * If 2, fully enable.
  * default: 2
  */
-int fsverity_enable = 2;
+#define FSVERITY_MODE_LEN 8
+static const char* fsverity_modes[] = {
+	"disable",
+	"audit",
+	"enforce",
+	NULL
+};
+static char fsverity_mode[FSVERITY_MODE_LEN] = "enforce";
 
 #ifdef CONFIG_SYSCTL
 static struct ctl_table_header *fsverity_sysctl_header;
@@ -27,6 +33,35 @@ static const struct ctl_path fsverity_sysctl_path[] = {
 	{ .procname = "verity", },
 	{ }
 };
+
+static int proc_do_fsverity_mode(struct ctl_table *table, int write,
+				 void *buffer, size_t *lenp, loff_t *ppos)
+{
+	char tmp_mode[FSVERITY_MODE_LEN];
+	const char **mode = fsverity_modes;
+	struct ctl_table tmp = {
+		.data = tmp_mode,
+		.maxlen = FSVERITY_MODE_LEN,
+		.mode = table->mode,
+	};
+	int ret;
+
+	strncpy(tmp_mode, fsverity_mode, FSVERITY_MODE_LEN);
+	ret = proc_dostring(&tmp, write, buffer, lenp, ppos);
+	if (write) {
+		while (*mode) {
+			if (!strcmp(*mode, tmp_mode))
+				break;
+			++mode;
+		}
+		if (!*mode) {
+			ret = -EINVAL;
+		} else {
+			strncpy(fsverity_mode, *mode, FSVERITY_MODE_LEN);
+		}
+	}
+	return ret;
+}
 
 static struct ctl_table fsverity_sysctl_table[] = {
 	{
@@ -39,13 +74,11 @@ static struct ctl_table fsverity_sysctl_table[] = {
 		.extra2         = SYSCTL_ONE,
 	},
 	{
-		.procname       = "enable",
-		.data           = &fsverity_enable,
-		.maxlen         = sizeof(int),
+		.procname       = "mode",
+		.data           = fsverity_mode,
+		.maxlen         = FSVERITY_MODE_LEN,
 		.mode           = 0644,
-		.proc_handler   = proc_dointvec_minmax,
-		.extra1         = SYSCTL_ZERO,
-		.extra2         = &two,
+		.proc_handler   = proc_do_fsverity_mode,
 	},
 	{ }
 };
@@ -65,5 +98,14 @@ void __init fsverity_exit_sysctl(void)
 {
 	unregister_sysctl_table(fsverity_sysctl_header);
 	fsverity_sysctl_header = NULL;
+}
+
+bool fsverity_disabled(void)
+{
+	return !strcmp(fsverity_mode, "disable");
+}
+bool fsverity_enforced(void)
+{
+	return !strcmp(fsverity_mode, "enforce");
 }
 #endif /* !CONFIG_SYSCTL */

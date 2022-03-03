@@ -12,7 +12,6 @@
 #include <linux/ratelimit.h>
 
 static struct workqueue_struct *fsverity_read_workqueue;
-extern int fsverity_enable;
 
 /**
  * hash_at_level() - compute the location of the block's hash at the given level
@@ -64,7 +63,10 @@ static inline int cmp_hashes(const struct fsverity_info *vi,
 		     index, level,
 		     vi->tree_params.hash_alg->name, hsize, want_hash,
 		     vi->tree_params.hash_alg->name, hsize, real_hash);
-	return -EBADMSG;
+	if (!fsverity_enforced()) {
+		printk(KERN_INFO "BO: fsverity not enforced, ignore error!\n");
+	}
+	return fsverity_enforced() ? -EBADMSG : 0;
 }
 
 /*
@@ -177,8 +179,6 @@ out:
 	for (; level > 0; level--)
 		put_page(hpages[level - 1]);
 
-	if (fsverity_enable == 1)
-		err = 0;
 	return err == 0;
 }
 
@@ -198,8 +198,12 @@ bool fsverity_verify_page(struct page *page)
 	struct ahash_request *req;
 	bool valid;
 
-	if (!fsverity_enable)
+	if (fsverity_disabled())
+	{
+		printk(KERN_INFO "BO: fsverity disabled, skip verify!\n");
 		return true;
+	}
+	printk(KERN_INFO "BO: verify_page inode: %lu, vi: %p\n", inode->i_ino, vi);
 	/* This allocation never fails, since it's mempool-backed. */
 	req = fsverity_alloc_hash_request(vi->tree_params.hash_alg, GFP_NOFS);
 
