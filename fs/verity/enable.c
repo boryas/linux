@@ -206,6 +206,8 @@ static int enable_verity(struct file *filp,
 	struct fsverity_info *vi;
 	int err;
 
+	printk(KERN_INFO "BO: enable_verity %lu\n", inode->i_ino);
+
 	/* Start initializing the fsverity_descriptor */
 	desc = kzalloc(desc_size, GFP_KERNEL);
 	if (!desc)
@@ -281,11 +283,13 @@ static int enable_verity(struct file *filp,
 	 * from disk.  This is simpler, and it serves as an extra check that the
 	 * metadata we're writing is valid before actually enabling verity.
 	 */
+	printk(KERN_INFO "BO: enable verity creates verity info\n");
 	vi = fsverity_create_info(inode, desc, desc_size);
 	if (IS_ERR(vi)) {
 		err = PTR_ERR(vi);
 		goto rollback;
 	}
+	printk(KERN_INFO "BO: enable verity created verity info %p\n", vi);
 
 	if (arg->sig_size)
 		pr_debug("Storing a %u-byte PKCS#7 signature alongside the file\n",

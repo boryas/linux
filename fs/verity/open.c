@@ -177,7 +177,7 @@ struct fsverity_info *fsverity_create_info(const struct inode *inode,
 		fsverity_err(inode, "Error %d computing file digest", err);
 		goto out;
 	}
-	pr_debug("Computed file digest: %s:%*phN\n",
+	pr_info("Computed file digest: %s:%*phN\n",
 		 vi->tree_params.hash_alg->name,
 		 vi->tree_params.digest_size, vi->file_digest);
 
@@ -208,6 +208,7 @@ void fsverity_set_info(struct inode *inode, struct fsverity_info *vi)
 		 */
 		(void)fsverity_get_info(inode);
 	}
+	printk(KERN_INFO "BO: done fsverity_set_info %lu %p\n", inode->i_ino, vi);
 }
 
 void fsverity_free_info(struct fsverity_info *vi)
@@ -308,9 +309,12 @@ static int ensure_verity_info(struct inode *inode)
 	struct fsverity_descriptor *desc;
 	size_t desc_size;
 	int err;
+	printk(KERN_INFO "BO: ensure_verity_info %lu\n", inode->i_ino);
 
-	if (vi)
+	if (vi) {
+		printk(KERN_INFO "BO: already have verity info: %p\n", vi);
 		return 0;
+	}
 
 	err = fsverity_get_descriptor(inode, &desc, &desc_size);
 	if (err)
@@ -323,6 +327,7 @@ static int ensure_verity_info(struct inode *inode)
 	}
 
 	fsverity_set_info(inode, vi);
+	printk(KERN_INFO "BO: done ensure_verity_info %lu %p\n", inode->i_ino, vi);
 	err = 0;
 out_free_desc:
 	kfree(desc);
@@ -346,6 +351,8 @@ int fsverity_file_open(struct inode *inode, struct file *filp)
 {
 	if (!IS_VERITY(inode) || fsverity_disabled())
 		return 0;
+
+	printk(KERN_INFO "BO: open verity file %lu\n", inode->i_ino);
 
 	if (filp->f_mode & FMODE_WRITE) {
 		pr_debug("Denying opening verity file (ino %lu) for write\n",

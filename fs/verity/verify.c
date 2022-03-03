@@ -101,6 +101,8 @@ static bool verify_page(struct inode *inode, const struct fsverity_info *vi,
 	unsigned int hoffsets[FS_VERITY_MAX_LEVELS];
 	int err;
 
+	printk(KERN_INFO "BO: fsverity verify_page %lu, %lu\n", inode->i_ino, index);
+
 	if (WARN_ON_ONCE(!PageLocked(data_page) || PageUptodate(data_page))) {
 		err = -EINVAL;
 		goto out;
@@ -207,6 +209,7 @@ bool fsverity_verify_page(struct page *page)
 	/* This allocation never fails, since it's mempool-backed. */
 	req = fsverity_alloc_hash_request(vi->tree_params.hash_alg, GFP_NOFS);
 
+	printk(KERN_INFO "BO: verify_page allocated hash req. inode: %lu, req: %p\n", inode->i_ino, req);
 	valid = verify_page(inode, vi, req, page, 0);
 
 	fsverity_free_hash_request(vi->tree_params.hash_alg, req);

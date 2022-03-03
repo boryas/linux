@@ -102,10 +102,16 @@ void __init fsverity_exit_sysctl(void)
 
 bool fsverity_disabled(void)
 {
-	return !strcmp(fsverity_mode, "disable");
+	bool ret;
+	ret = !strcmp(fsverity_mode, "disable");
+	printk(KERN_INFO "BO: fsverity_disabled: %d %s %s\n", ret, fsverity_mode, "disable");
+	return ret;
 }
 bool fsverity_enforced(void)
 {
-	return !strcmp(fsverity_mode, "enforce");
+	bool ret;
+	ret = !strcmp(fsverity_mode, "enforce");
+	printk(KERN_INFO "BO: fsverity_enforce: %d %s %s\n", ret, fsverity_mode, "enforce");
+	return ret;
 }
 #endif /* !CONFIG_SYSCTL */
