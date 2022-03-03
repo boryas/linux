@@ -349,7 +349,10 @@ out_free_desc:
  */
 int fsverity_file_open(struct inode *inode, struct file *filp)
 {
-	if (!IS_VERITY(inode) || fsverity_disabled())
+	if (fsverity_disabled())
+		return 0;
+
+	if (!IS_VERITY(inode))
 		return 0;
 
 	printk(KERN_INFO "BO: open verity file %lu\n", inode->i_ino);
@@ -360,7 +363,7 @@ int fsverity_file_open(struct inode *inode, struct file *filp)
 		return -EPERM;
 	}
 
-	return ensure_verity_info(inode);
+	return ensure_verity_info(inode) && fsverity_enforced();
 }
 EXPORT_SYMBOL_GPL(fsverity_file_open);
 

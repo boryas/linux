@@ -42,10 +42,12 @@ int fsverity_verify_signature(const struct fsverity_info *vi,
 	int err;
 
 	if (sig_size == 0) {
+		err = 0;
 		if (fsverity_require_signatures) {
 			fsverity_err(inode,
 				     "require_signatures=1, rejecting unsigned file!");
 			err = fsverity_enforced() ? -EPERM : 0;
+			err = -EPERM;
 		}
 		return err;
 	}

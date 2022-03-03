@@ -67,6 +67,7 @@ static inline int cmp_hashes(const struct fsverity_info *vi,
 		printk(KERN_INFO "BO: fsverity not enforced, ignore error!\n");
 	}
 	return fsverity_enforced() ? -EBADMSG : 0;
+	return -EBADMSG;
 }
 
 /*
