@@ -3937,6 +3937,7 @@ static void release_block_group(struct btrfs_block_group *block_group,
 		BUG();
 	}
 
+	printk(KERN_INFO "BO: %d: release block group %llu flags %lld raid index %d ffe_ctl->index: %d\n", current->pid, block_group->start, block_group->flags, btrfs_bg_flags_to_raid_index(block_group->flags), ffe_ctl->index);
 	BUG_ON(btrfs_bg_flags_to_raid_index(block_group->flags) !=
 	       ffe_ctl->index);
 	btrfs_release_block_group(block_group, delalloc);
@@ -4035,6 +4036,7 @@ static int find_free_extent_update_loop(struct btrfs_fs_info *fs_info,
 		return 1;
 
 	ffe_ctl->index++;
+	printk(KERN_INFO "BO: %d bump ffe_ctl index to %d\n", current->pid, ffe_ctl->index);
 	if (ffe_ctl->index < BTRFS_NR_RAID_TYPES)
 		return 1;
 
@@ -4229,6 +4231,7 @@ static noinline int find_free_extent(struct btrfs_root *root,
 	int cache_block_group_error = 0;
 	struct btrfs_block_group *block_group = NULL;
 	struct btrfs_space_info *space_info;
+	struct rb_node *node;
 	bool full_search = false;
 
 	WARN_ON(ffe_ctl->num_bytes < fs_info->sectorsize);
@@ -4314,9 +4317,24 @@ search:
 	    ffe_ctl->index == 0)
 		full_search = true;
 	down_read(&space_info->groups_sem);
+	/*
 	list_for_each_entry(block_group,
 			    &space_info->block_groups[ffe_ctl->index], list) {
+	*/
+	struct rb_root_cached *rbroot = &space_info->size_index[ffe_ctl->index];
+	node = rb_first_cached(rbroot);
+	printk(KERN_INFO "BO: %d: ffe search. ffe_ctl->index %d root: %p node: %p\n", current->pid, ffe_ctl->index, rbroot, node);
+	if (node && node->rb_right) {
+		printk(KERN_INFO "BO: %d: ffe search. right: %p next left: %p\n", current->pid, node->rb_right, node->rb_right->rb_left);
+	}
+
+	for (node = rb_first_cached(&space_info->size_index[ffe_ctl->index]); node; node = rb_next(node)) {
+		printk(KERN_INFO "BO: %d: ffe rb iter node %p\n", current->pid, node);
+		block_group = rb_entry(node, struct btrfs_block_group, size_index_node);
+		printk(KERN_INFO "BO: %d: ffe rb iter bg %p\n", current->pid, block_group);
 		struct btrfs_block_group *bg_ret;
+
+		printk(KERN_INFO "BO: %d: ffe rb iter bg %llu flags %lld raid_index %d ffe_ctl->index %d\n", current->pid, block_group->start, block_group->flags, btrfs_bg_flags_to_raid_index(block_group->flags), ffe_ctl->index);
 
 		/* If the block group is read-only, we can skip it entirely. */
 		if (unlikely(block_group->ro)) {
@@ -4354,7 +4372,9 @@ search:
 			 * It's possible that we have MIXED_GROUP flag but no
 			 * block group is mixed.  Just skip such block group.
 			 */
+			printk(KERN_INFO "BO: %d: continue ffe loop bg: %llu\n", current->pid, block_group->start);
 			btrfs_release_block_group(block_group, ffe_ctl->delalloc);
+			printk(KERN_INFO "BO: %d: continue ffe loop node: %p\n", current->pid, node);
 			continue;
 		}
 
@@ -4429,6 +4449,7 @@ have_block_group:
 		/* we are all good, lets return */
 		ins->objectid = ffe_ctl->search_start;
 		ins->offset = ffe_ctl->num_bytes;
+		printk(KERN_INFO "BO: %d: found bg: %llu\n", current->pid, block_group->start);
 
 		trace_btrfs_reserve_extent(block_group, ffe_ctl->search_start,
 					   ffe_ctl->num_bytes);
@@ -4441,8 +4462,10 @@ loop:
 	up_read(&space_info->groups_sem);
 
 	ret = find_free_extent_update_loop(fs_info, ins, ffe_ctl, full_search);
-	if (ret > 0)
+	if (ret > 0) {
+		printk(KERN_INFO "BO: %d: ffe goto search %p\n", current->pid, node);
 		goto search;
+	}
 
 	if (ret == -ENOSPC && !cache_block_group_error) {
 		/*

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include <linux/list_sort.h>
+#include <linux/rbtree_types.h>
 #include "misc.h"
 #include "ctree.h"
 #include "block-group.h"
@@ -155,6 +156,7 @@ void btrfs_put_block_group(struct btrfs_block_group *cache)
 		WARN_ON(!RB_EMPTY_ROOT(&cache->full_stripe_locks_root.root));
 		kfree(cache->free_space_ctl);
 		kfree(cache->physical_map);
+		printk(KERN_INFO "BO: free bg %llu\n", cache->start);
 		kfree(cache);
 	}
 }
@@ -980,6 +982,9 @@ int btrfs_remove_block_group(struct btrfs_trans_handle *trans,
 		block_group->space_info->block_group_kobjs[index] = NULL;
 		clear_avail_alloc_bits(fs_info, block_group->flags);
 	}
+	rb_erase_cached(&block_group->size_index_node,
+			&block_group->space_info->size_index[index]);
+	printk(KERN_INFO "BO: removed bg %llu from size index; raid index %d\n", block_group->start, index);
 	up_write(&block_group->space_info->groups_sem);
 	clear_incompat_bg_bits(fs_info, block_group->flags);
 	if (kobj) {
@@ -1887,6 +1892,32 @@ static int exclude_super_stripes(struct btrfs_block_group *cache)
 	return 0;
 }
 
+static void insert_size_index(struct btrfs_block_group *cache,
+			      int raid_index)
+{
+	struct btrfs_space_info *space_info = cache->space_info;
+	struct rb_root_cached *root = &(space_info->size_index[raid_index]);
+	struct rb_node **p = &root->rb_root.rb_node;
+	struct rb_node *parent = NULL;
+	struct btrfs_block_group *bg;
+	bool leftmost = true;
+
+	while (*p) {
+		parent = *p;
+		bg = rb_entry(parent, struct btrfs_block_group, size_index_node);
+		if (cache->length < bg->length) {
+			p = &(*p)->rb_left;
+		} else {
+			p = &(*p)->rb_right;
+			leftmost = false;
+		}
+	}
+
+	rb_link_node(&cache->size_index_node, parent, p);
+	rb_insert_color_cached(&cache->size_index_node, root, leftmost);
+	printk(KERN_INFO "BO: added bg %llu to size index; raid index: %d\n", cache->start, raid_index);
+}
+
 static void link_block_group(struct btrfs_block_group *cache)
 {
 	struct btrfs_space_info *space_info = cache->space_info;
@@ -1894,6 +1925,7 @@ static void link_block_group(struct btrfs_block_group *cache)
 
 	down_write(&space_info->groups_sem);
 	list_add_tail(&cache->list, &space_info->block_groups[index]);
+	insert_size_index(cache, index);
 	up_write(&space_info->groups_sem);
 }
 
@@ -3329,6 +3361,8 @@ int btrfs_update_block_group(struct btrfs_trans_handle *trans,
 		total -= num_bytes;
 		bytenr += num_bytes;
 	}
+
+	// TODO: BO: update space index
 
 	/* Modified block groups are accounted for in the delayed_refs_rsv. */
 	btrfs_update_delayed_refs_rsv(trans);

@@ -67,6 +67,8 @@ struct btrfs_space_info {
 
 	struct kobject kobj;
 	struct kobject *block_group_kobjs[BTRFS_NR_RAID_TYPES];
+
+	struct rb_root_cached size_index[BTRFS_NR_RAID_TYPES];
 };
 
 struct reserve_ticket {

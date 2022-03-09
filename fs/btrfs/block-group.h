@@ -208,6 +208,8 @@ struct btrfs_block_group {
 	u64 meta_write_pointer;
 	struct map_lookup *physical_map;
 	struct list_head active_bg_list;
+
+	struct rb_node size_index_node;
 };
 
 static inline u64 btrfs_block_group_end(struct btrfs_block_group *block_group)
