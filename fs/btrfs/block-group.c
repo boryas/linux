@@ -119,6 +119,7 @@ u64 btrfs_get_alloc_profile(struct btrfs_fs_info *fs_info, u64 orig_flags)
 void btrfs_get_block_group(struct btrfs_block_group *cache)
 {
 	refcount_inc(&cache->refs);
+	//printk(KERN_INFO "BO: get bg %llu %d\n", cache->start, cache->refs.refs.counter);
 }
 
 void btrfs_put_block_group(struct btrfs_block_group *cache)
@@ -158,7 +159,11 @@ void btrfs_put_block_group(struct btrfs_block_group *cache)
 		kfree(cache->physical_map);
 		printk(KERN_INFO "BO: free bg %llu\n", cache->start);
 		kfree(cache);
+		goto out;
 	}
+	//printk(KERN_INFO "BO: put bg %llu %d\n", cache->start, cache->refs.refs.counter);
+out:
+	return;
 }
 
 /*

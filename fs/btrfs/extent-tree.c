@@ -4305,6 +4305,7 @@ static noinline int find_free_extent(struct btrfs_root *root,
 							block_group->flags);
 				btrfs_lock_block_group(block_group,
 						       ffe_ctl->delalloc);
+				printk(KERN_INFO "BO: %d: goto cached bg: %llu\n", current->pid, block_group->start);
 				goto have_block_group;
 			}
 		} else if (block_group) {
@@ -4323,7 +4324,8 @@ search:
 	*/
 	struct rb_root_cached *rbroot = &space_info->size_index[ffe_ctl->index];
 	node = rb_first_cached(rbroot);
-	printk(KERN_INFO "BO: %d: ffe search. ffe_ctl->index %d root: %p node: %p\n", current->pid, ffe_ctl->index, rbroot, node);
+	printk(KERN_INFO "BO: %d: ffe search 1. ffe_ctl->index %d\n", current->pid, ffe_ctl->index);
+	printk(KERN_INFO "BO: %d: ffe search 2. ffe_ctl->index %d root: %p node: %p\n", current->pid, ffe_ctl->index, rbroot, node);
 	if (node && node->rb_right) {
 		printk(KERN_INFO "BO: %d: ffe search. right: %p next left: %p\n", current->pid, node->rb_right, node->rb_right->rb_left);
 	}
@@ -4372,13 +4374,14 @@ search:
 			 * It's possible that we have MIXED_GROUP flag but no
 			 * block group is mixed.  Just skip such block group.
 			 */
-			printk(KERN_INFO "BO: %d: continue ffe loop bg: %llu\n", current->pid, block_group->start);
+			printk(KERN_INFO "BO: %d: ffe continue bg: %llu\n", current->pid, block_group->start);
 			btrfs_release_block_group(block_group, ffe_ctl->delalloc);
-			printk(KERN_INFO "BO: %d: continue ffe loop node: %p\n", current->pid, node);
+			printk(KERN_INFO "BO: %d: ffe continue node: %p\n", current->pid, node);
 			continue;
 		}
 
 have_block_group:
+		printk(KERN_INFO "BO: %d: have_block_group: %llu\n", current->pid, block_group->start);
 		ffe_ctl->cached = btrfs_block_group_done(block_group);
 		if (unlikely(!ffe_ctl->cached)) {
 			ffe_ctl->have_caching_bg = true;
@@ -4456,14 +4459,17 @@ have_block_group:
 		btrfs_release_block_group(block_group, ffe_ctl->delalloc);
 		break;
 loop:
+		printk(KERN_INFO "BO: %d: ffe loop: %p\n", current->pid, node);
 		release_block_group(block_group, ffe_ctl, ffe_ctl->delalloc);
 		cond_resched();
+		printk(KERN_INFO "BO: %d: ffe loop 2: %p %lu %p %p\n", current->pid, node, node->__rb_parent_color, node->rb_right, node->rb_left);
 	}
 	up_read(&space_info->groups_sem);
 
 	ret = find_free_extent_update_loop(fs_info, ins, ffe_ctl, full_search);
 	if (ret > 0) {
-		printk(KERN_INFO "BO: %d: ffe goto search %p\n", current->pid, node);
+		printk(KERN_INFO "BO: %d: ffe goto search 1 %llu\n", current->pid, ins->objectid);
+		printk(KERN_INFO "BO: %d: ffe goto search 2 %p\n", current->pid, node);
 		goto search;
 	}
 
