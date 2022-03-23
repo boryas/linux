@@ -9926,7 +9926,7 @@ static int __btrfs_prealloc_file_range(struct inode *inode, int mode,
 	if (trans)
 		own_trans = false;
 	while (num_bytes > 0) {
-		cur_bytes = min_t(u64, num_bytes, SZ_256M);
+		cur_bytes = min_t(u64, num_bytes, SZ_1G);
 		cur_bytes = max(cur_bytes, min_size);
 		/*
 		 * If we are severely fragmented we could end up with really
