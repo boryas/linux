@@ -208,7 +208,6 @@ void fsverity_set_info(struct inode *inode, struct fsverity_info *vi)
 		 */
 		(void)fsverity_get_info(inode);
 	}
-	printk(KERN_INFO "BO: done fsverity_set_info %lu %p\n", inode->i_ino, vi);
 }
 
 void fsverity_free_info(struct fsverity_info *vi)
@@ -309,12 +308,9 @@ static int ensure_verity_info(struct inode *inode)
 	struct fsverity_descriptor *desc;
 	size_t desc_size;
 	int err;
-	printk(KERN_INFO "BO: ensure_verity_info %lu\n", inode->i_ino);
 
-	if (vi) {
-		printk(KERN_INFO "BO: already have verity info: %p\n", vi);
+	if (vi)
 		return 0;
-	}
 
 	err = fsverity_get_descriptor(inode, &desc, &desc_size);
 	if (err)
@@ -327,7 +323,6 @@ static int ensure_verity_info(struct inode *inode)
 	}
 
 	fsverity_set_info(inode, vi);
-	printk(KERN_INFO "BO: done ensure_verity_info %lu %p\n", inode->i_ino, vi);
 	err = 0;
 out_free_desc:
 	kfree(desc);
@@ -349,13 +344,13 @@ out_free_desc:
  */
 int fsverity_file_open(struct inode *inode, struct file *filp)
 {
+	int ret;
+
 	if (fsverity_disabled())
 		return 0;
 
 	if (!IS_VERITY(inode))
 		return 0;
-
-	printk(KERN_INFO "BO: open verity file %lu\n", inode->i_ino);
 
 	if (filp->f_mode & FMODE_WRITE) {
 		pr_debug("Denying opening verity file (ino %lu) for write\n",
@@ -363,7 +358,12 @@ int fsverity_file_open(struct inode *inode, struct file *filp)
 		return -EPERM;
 	}
 
-	return ensure_verity_info(inode) && fsverity_enforced();
+	ret = ensure_verity_info(inode);
+	if (!fsverity_enforced()) {
+		fsverity_warn(inode, "AUDIT ONLY: ignore missing verity info");
+		return 0;
+	}
+	return ret;
 }
 EXPORT_SYMBOL_GPL(fsverity_file_open);
 

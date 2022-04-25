@@ -7,6 +7,7 @@
 
 #include "fsverity_private.h"
 
+#include "linux/export.h"
 #include <crypto/hash.h>
 #include <linux/bio.h>
 #include <linux/ratelimit.h>
@@ -64,9 +65,9 @@ static inline int cmp_hashes(const struct fsverity_info *vi,
 		     vi->tree_params.hash_alg->name, hsize, want_hash,
 		     vi->tree_params.hash_alg->name, hsize, real_hash);
 	if (!fsverity_enforced()) {
-		printk(KERN_INFO "BO: fsverity not enforced, ignore error!\n");
+		fsverity_warn(vi->inode, "AUDIT ONLY. ignore corruption");
+		return 0;
 	}
-	return fsverity_enforced() ? -EBADMSG : 0;
 	return -EBADMSG;
 }
 
@@ -101,8 +102,6 @@ static bool verify_page(struct inode *inode, const struct fsverity_info *vi,
 	struct page *hpages[FS_VERITY_MAX_LEVELS];
 	unsigned int hoffsets[FS_VERITY_MAX_LEVELS];
 	int err;
-
-	printk(KERN_INFO "BO: fsverity verify_page %lu, %lu\n", inode->i_ino, index);
 
 	if (WARN_ON_ONCE(!PageLocked(data_page) || PageUptodate(data_page))) {
 		err = -EINVAL;
@@ -202,15 +201,10 @@ bool fsverity_verify_page(struct page *page)
 	bool valid;
 
 	if (fsverity_disabled())
-	{
-		printk(KERN_INFO "BO: fsverity disabled, skip verify!\n");
 		return true;
-	}
-	printk(KERN_INFO "BO: verify_page inode: %lu, vi: %p\n", inode->i_ino, vi);
 	/* This allocation never fails, since it's mempool-backed. */
 	req = fsverity_alloc_hash_request(vi->tree_params.hash_alg, GFP_NOFS);
 
-	printk(KERN_INFO "BO: verify_page allocated hash req. inode: %lu, req: %p\n", inode->i_ino, req);
 	valid = verify_page(inode, vi, req, page, 0);
 
 	fsverity_free_hash_request(vi->tree_params.hash_alg, req);
@@ -290,6 +284,27 @@ void fsverity_enqueue_verify_work(struct work_struct *work)
 	queue_work(fsverity_read_workqueue, work);
 }
 EXPORT_SYMBOL_GPL(fsverity_enqueue_verify_work);
+
+/**
+ * fsverity_active() - do reads from the inode need to go through fs-verity?
+ * @inode: inode to check
+ *
+ * This checks whether ->i_verity_info has been set.
+ *
+ * Filesystems call this from ->readahead() to check whether the pages need to
+ * be verified or not.  Don't use IS_VERITY() for this purpose; it's subject to
+ * a race condition where the file is being read concurrently with
+ * FS_IOC_ENABLE_VERITY completing.  (S_VERITY is set before ->i_verity_info.)
+ *
+ * Return: true if reads need to go through fs-verity, otherwise false
+ */
+bool fsverity_active(const struct inode *inode)
+{
+	if (fsverity_disabled())
+		return false;
+	return fsverity_get_info(inode) != NULL;
+}
+EXPORT_SYMBOL_GPL(fsverity_active);
 
 int __init fsverity_init_workqueue(void)
 {
