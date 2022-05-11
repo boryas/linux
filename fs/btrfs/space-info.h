@@ -5,6 +5,20 @@
 
 #include "volumes.h"
 
+enum btrfs_block_group_size_class {
+	BTRFS_BG_SZ_NONE,
+	BTRFS_BG_SZ_SMALL,
+	BTRFS_BG_SZ_LARGE,
+	BTRFS_NR_BG_SIZE_CLASSES
+};
+enum btrfs_block_group_size_class btrfs_extent_len_to_size_class(u64 len);
+
+
+struct btrfs_space_slab {
+	struct rw_semaphore slab_sem;
+	struct list_head block_groups[BTRFS_NR_BG_SIZE_CLASSES];
+};
+
 struct btrfs_space_info {
 	spinlock_t lock;
 
@@ -74,6 +88,8 @@ struct btrfs_space_info {
 	struct rw_semaphore groups_sem;
 	/* for block groups in our same type */
 	struct list_head block_groups[BTRFS_NR_RAID_TYPES];
+
+	struct btrfs_space_slab space_slabs[BTRFS_NR_RAID_TYPES];
 
 	struct kobject kobj;
 	struct kobject *block_group_kobjs[BTRFS_NR_RAID_TYPES];

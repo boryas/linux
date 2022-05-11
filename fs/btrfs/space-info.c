@@ -222,15 +222,23 @@ static int create_space_info(struct btrfs_fs_info *info, u64 flags)
 {
 
 	struct btrfs_space_info *space_info;
+	struct btrfs_space_slab *space_slab;
 	int i;
+	int j;
 	int ret;
 
 	space_info = kzalloc(sizeof(*space_info), GFP_NOFS);
 	if (!space_info)
 		return -ENOMEM;
 
-	for (i = 0; i < BTRFS_NR_RAID_TYPES; i++)
+	for (i = 0; i < BTRFS_NR_RAID_TYPES; i++) {
 		INIT_LIST_HEAD(&space_info->block_groups[i]);
+		space_slab = &space_info->space_slabs[i];
+		init_rwsem(&space_slab->slab_sem);
+		for (j = 0; j < BTRFS_NR_BG_SIZE_CLASSES; j++) {
+			INIT_LIST_HEAD(&space_slab->block_groups[j]);
+		}
+	}
 	init_rwsem(&space_info->groups_sem);
 	spin_lock_init(&space_info->lock);
 	space_info->flags = flags & BTRFS_BLOCK_GROUP_TYPE_MASK;
@@ -1692,4 +1700,11 @@ int btrfs_reserve_data_bytes(struct btrfs_fs_info *fs_info, u64 bytes,
 			btrfs_dump_space_info(fs_info, data_sinfo, bytes, 0);
 	}
 	return ret;
+}
+
+enum btrfs_block_group_size_class btrfs_extent_len_to_size_class(u64 len)
+{
+	if (len < SZ_256M)
+		return BTRFS_BG_SZ_SMALL;
+	return BTRFS_BG_SZ_LARGE;
 }

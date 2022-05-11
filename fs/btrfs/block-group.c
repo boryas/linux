@@ -4,7 +4,6 @@
 #include "misc.h"
 #include "ctree.h"
 #include "block-group.h"
-#include "space-info.h"
 #include "disk-io.h"
 #include "free-space-cache.h"
 #include "free-space-tree.h"
@@ -893,6 +892,8 @@ int btrfs_remove_block_group(struct btrfs_trans_handle *trans,
 	struct btrfs_path *path;
 	struct btrfs_block_group *block_group;
 	struct btrfs_free_cluster *cluster;
+	struct btrfs_space_info *space_info;
+	struct btrfs_space_slab *space_slab;
 	struct inode *inode;
 	struct kobject *kobj = NULL;
 	int ret;
@@ -987,18 +988,25 @@ int btrfs_remove_block_group(struct btrfs_trans_handle *trans,
 
 	write_unlock(&fs_info->block_group_cache_lock);
 
-	down_write(&block_group->space_info->groups_sem);
+	space_info = block_group->space_info;
+	down_write(&space_info->groups_sem);
 	/*
 	 * we must use list_del_init so people can check to see if they
 	 * are still on the list after taking the semaphore
 	 */
 	list_del_init(&block_group->list);
-	if (list_empty(&block_group->space_info->block_groups[index])) {
-		kobj = block_group->space_info->block_group_kobjs[index];
-		block_group->space_info->block_group_kobjs[index] = NULL;
+	if (list_empty(&space_info->block_groups[index])) {
+		kobj = space_info->block_group_kobjs[index];
+		space_info->block_group_kobjs[index] = NULL;
 		clear_avail_alloc_bits(fs_info, block_group->flags);
 	}
-	up_write(&block_group->space_info->groups_sem);
+	up_write(&space_info->groups_sem);
+
+	space_slab = &space_info->space_slabs[index];
+	down_write(&space_slab->slab_sem);
+	list_del_init(&block_group->slab_list);
+	up_write(&space_slab->slab_sem);
+
 	clear_incompat_bg_bits(fs_info, block_group->flags);
 	if (kobj) {
 		kobject_del(kobj);
@@ -1039,27 +1047,24 @@ int btrfs_remove_block_group(struct btrfs_trans_handle *trans,
 
 	btrfs_remove_free_space_cache(block_group);
 
-	spin_lock(&block_group->space_info->lock);
+	spin_lock(&space_info->lock);
 	list_del_init(&block_group->ro_list);
 
 	if (btrfs_test_opt(fs_info, ENOSPC_DEBUG)) {
-		WARN_ON(block_group->space_info->total_bytes
-			< block_group->length);
-		WARN_ON(block_group->space_info->bytes_readonly
+		WARN_ON(space_info->total_bytes < block_group->length);
+		WARN_ON(space_info->bytes_readonly
 			< block_group->length - block_group->zone_unusable);
-		WARN_ON(block_group->space_info->bytes_zone_unusable
+		WARN_ON(space_info->bytes_zone_unusable
 			< block_group->zone_unusable);
-		WARN_ON(block_group->space_info->disk_total
-			< block_group->length * factor);
+		WARN_ON(space_info->disk_total < block_group->length * factor);
 	}
-	block_group->space_info->total_bytes -= block_group->length;
-	block_group->space_info->bytes_readonly -=
+	space_info->total_bytes -= block_group->length;
+	space_info->bytes_readonly -=
 		(block_group->length - block_group->zone_unusable);
-	block_group->space_info->bytes_zone_unusable -=
-		block_group->zone_unusable;
-	block_group->space_info->disk_total -= block_group->length * factor;
+	space_info->bytes_zone_unusable -= block_group->zone_unusable;
+	space_info->disk_total -= block_group->length * factor;
 
-	spin_unlock(&block_group->space_info->lock);
+	spin_unlock(&space_info->lock);
 
 	/*
 	 * Remove the free space for the block group from the free space tree
@@ -1660,6 +1665,8 @@ void btrfs_reclaim_bgs(struct btrfs_fs_info *fs_info)
 void btrfs_mark_bg_to_reclaim(struct btrfs_block_group *bg)
 {
 	struct btrfs_fs_info *fs_info = bg->fs_info;
+	struct btrfs_space_slab *space_slab;
+	int index = btrfs_bg_flags_to_raid_index(bg->flags);
 
 	spin_lock(&fs_info->unused_bgs_lock);
 	if (list_empty(&bg->bg_list)) {
@@ -1668,6 +1675,10 @@ void btrfs_mark_bg_to_reclaim(struct btrfs_block_group *bg)
 		list_add_tail(&bg->bg_list, &fs_info->reclaim_bgs);
 	}
 	spin_unlock(&fs_info->unused_bgs_lock);
+	space_slab = &bg->space_info->space_slabs[index];
+	down_write(&space_slab->slab_sem);
+	list_del_init(&bg->slab_list);
+	up_write(&space_slab->slab_sem);
 }
 
 static int read_bg_from_eb(struct btrfs_fs_info *fs_info, struct btrfs_key *key,
@@ -1945,6 +1956,7 @@ static struct btrfs_block_group *btrfs_create_block_group_cache(
 	INIT_LIST_HEAD(&cache->dirty_list);
 	INIT_LIST_HEAD(&cache->io_list);
 	INIT_LIST_HEAD(&cache->active_bg_list);
+	INIT_LIST_HEAD(&cache->slab_list);
 	btrfs_init_free_space_ctl(cache, cache->free_space_ctl);
 	atomic_set(&cache->frozen, 0);
 	mutex_init(&cache->free_space_lock);
@@ -3410,9 +3422,8 @@ int btrfs_add_reserved_bytes(struct btrfs_block_group *cache,
 		 */
 		if (num_bytes < ram_bytes)
 			btrfs_try_granting_tickets(cache->fs_info, space_info);
-	}
-	if (cache->size_class == BTRFS_BG_SZ_NONE) {
-		cache->size_class = btrfs_extent_len_to_size_class(num_bytes);
+		if (cache->size_class == BTRFS_BG_SZ_NONE)
+			cache->size_class = btrfs_extent_len_to_size_class(num_bytes);
 	}
 	spin_unlock(&cache->lock);
 	spin_unlock(&space_info->lock);
@@ -4173,11 +4184,4 @@ void btrfs_dec_block_group_swap_extents(struct btrfs_block_group *bg, int amount
 	ASSERT(bg->swap_extents >= amount);
 	bg->swap_extents -= amount;
 	spin_unlock(&bg->lock);
-}
-
-enum btrfs_block_group_size_class btrfs_extent_len_to_size_class(u64 len)
-{
-	if (len < SZ_256M)
-		return BTRFS_BG_SZ_SMALL;
-	return BTRFS_BG_SZ_LARGE;
 }

@@ -3,6 +3,7 @@
  * Copyright (C) 2007 Oracle.  All rights reserved.
  */
 
+#include "linux/btrfs_tree.h"
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
 #include <linux/pagemap.h>
@@ -3690,8 +3691,11 @@ static int find_free_extent_unclustered(struct btrfs_block_group *bg,
 		spin_unlock(&free_space_ctl->tree_lock);
 	}
 
-	if (bg->size_class != BTRFS_BG_SZ_NONE && bg->size_class != size_class)
+	if (bg->flags & BTRFS_BLOCK_GROUP_DATA &&
+	    bg->size_class != BTRFS_BG_SZ_NONE &&
+	    bg->size_class != size_class) {
 		return 1;
+	}
 
 	offset = btrfs_find_space_for_alloc(bg, ffe_ctl->search_start,
 			ffe_ctl->num_bytes, ffe_ctl->empty_size,
@@ -4418,6 +4422,8 @@ static noinline int find_free_extent(struct btrfs_root *root,
 	struct btrfs_block_group *block_group = NULL;
 	struct btrfs_space_info *space_info;
 	bool full_search = false;
+	struct btrfs_space_slab *space_slab;
+	enum btrfs_block_group_size_class size_class;
 
 	WARN_ON(ffe_ctl->num_bytes < fs_info->sectorsize);
 
@@ -4438,6 +4444,7 @@ static noinline int find_free_extent(struct btrfs_root *root,
 	ffe_ctl->total_free_space = 0;
 	ffe_ctl->found_offset = 0;
 	ffe_ctl->policy = BTRFS_EXTENT_ALLOC_CLUSTERED;
+	size_class = btrfs_extent_len_to_size_class(ffe_ctl->num_bytes);
 
 	if (btrfs_is_zoned(fs_info))
 		ffe_ctl->policy = BTRFS_EXTENT_ALLOC_ZONED;
@@ -4454,6 +4461,7 @@ static noinline int find_free_extent(struct btrfs_root *root,
 		btrfs_err(fs_info, "No space info for %llu", ffe_ctl->flags);
 		return -ENOSPC;
 	}
+	space_slab = &space_info->space_slabs[ffe_ctl->index];
 
 	ret = prepare_allocation(fs_info, ffe_ctl, space_info, ins);
 	if (ret < 0)
@@ -4470,6 +4478,31 @@ search:
 	if (ffe_ctl->index == btrfs_bg_flags_to_raid_index(ffe_ctl->flags) ||
 	    ffe_ctl->index == 0)
 		full_search = true;
+
+	down_read(&space_slab->slab_sem);
+	list_for_each_entry(block_group,
+			    &space_slab->block_groups[size_class], slab_list) {
+		ret = ffe_grab_block_group(fs_info, ffe_ctl, block_group);
+		if (ret)
+			continue;
+		ret = ffe_have_block_group(fs_info, ffe_ctl, &block_group, ins,
+					   &cache_block_group_error);
+		if (ret == 0 && ins->objectid)
+			break;
+		release_block_group(block_group, ffe_ctl, ffe_ctl->delalloc);
+		cond_resched();
+	}
+	up_read(&space_slab->slab_sem);
+	if (ins->objectid) {
+		printk(KERN_INFO "BO: FFE: %d: type %llu; slab success! done\n",
+		       current->pid, space_info->flags & BTRFS_BLOCK_GROUP_TYPE_MASK);
+		down_write(&space_slab->slab_sem);
+		list_add_tail(&block_group->slab_list,
+			      &space_slab->block_groups[size_class]);
+		up_write(&space_slab->slab_sem);
+		btrfs_release_block_group(block_group, ffe_ctl->delalloc);
+		goto done;
+	}
 	down_read(&space_info->groups_sem);
 	list_for_each_entry(block_group,
 			    &space_info->block_groups[ffe_ctl->index], list) {
@@ -4489,6 +4522,7 @@ have_block_group:
 	}
 	up_read(&space_info->groups_sem);
 
+done:
 	ret = find_free_extent_update_loop(fs_info, ins, ffe_ctl, full_search);
 	if (ret > 0)
 		goto search;
