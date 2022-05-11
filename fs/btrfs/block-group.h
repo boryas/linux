@@ -59,6 +59,13 @@ struct btrfs_caching_control {
 /* Once caching_thread() finds this much free space, it will wake up waiters. */
 #define CACHING_CTL_WAKE_UP SZ_2M
 
+enum btrfs_block_group_size_class {
+	BTRFS_BG_SZ_NONE,
+	BTRFS_BG_SZ_SMALL,
+	BTRFS_BG_SZ_LARGE,
+};
+enum btrfs_block_group_size_class btrfs_extent_len_to_size_class(u64 len);
+
 struct btrfs_block_group {
 	struct btrfs_fs_info *fs_info;
 	struct inode *inode;
@@ -214,6 +221,7 @@ struct btrfs_block_group {
 	struct list_head active_bg_list;
 	struct work_struct zone_finish_work;
 	struct extent_buffer *last_eb;
+	enum btrfs_block_group_size_class size_class;
 };
 
 static inline u64 btrfs_block_group_end(struct btrfs_block_group *block_group)

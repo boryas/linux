@@ -3330,6 +3330,8 @@ int btrfs_update_block_group(struct btrfs_trans_handle *trans,
 			cache->space_info->disk_used -= num_bytes * factor;
 
 			reclaim = should_reclaim_block_group(cache, num_bytes);
+			if (cache->used == 0)
+				cache->size_class = BTRFS_BG_SZ_NONE;
 			spin_unlock(&cache->lock);
 			spin_unlock(&cache->space_info->lock);
 
@@ -3408,6 +3410,9 @@ int btrfs_add_reserved_bytes(struct btrfs_block_group *cache,
 		 */
 		if (num_bytes < ram_bytes)
 			btrfs_try_granting_tickets(cache->fs_info, space_info);
+	}
+	if (cache->size_class == BTRFS_BG_SZ_NONE) {
+		cache->size_class = btrfs_extent_len_to_size_class(num_bytes);
 	}
 	spin_unlock(&cache->lock);
 	spin_unlock(&space_info->lock);
@@ -4168,4 +4173,11 @@ void btrfs_dec_block_group_swap_extents(struct btrfs_block_group *bg, int amount
 	ASSERT(bg->swap_extents >= amount);
 	bg->swap_extents -= amount;
 	spin_unlock(&bg->lock);
+}
+
+enum btrfs_block_group_size_class btrfs_extent_len_to_size_class(u64 len)
+{
+	if (len < SZ_256M)
+		return BTRFS_BG_SZ_SMALL;
+	return BTRFS_BG_SZ_LARGE;
 }

@@ -3661,6 +3661,7 @@ static int find_free_extent_unclustered(struct btrfs_block_group *bg,
 {
 	struct btrfs_free_cluster *last_ptr = ffe_ctl->last_ptr;
 	u64 offset;
+	enum btrfs_block_group_size_class size_class = btrfs_extent_len_to_size_class(ffe_ctl->num_bytes);
 
 	/*
 	 * We are doing an unclustered allocation, set the fragmented flag so
@@ -3688,6 +3689,9 @@ static int find_free_extent_unclustered(struct btrfs_block_group *bg,
 		}
 		spin_unlock(&free_space_ctl->tree_lock);
 	}
+
+	if (bg->size_class != BTRFS_BG_SZ_NONE && bg->size_class != size_class)
+		return 1;
 
 	offset = btrfs_find_space_for_alloc(bg, ffe_ctl->search_start,
 			ffe_ctl->num_bytes, ffe_ctl->empty_size,
