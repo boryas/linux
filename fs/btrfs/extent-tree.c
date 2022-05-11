@@ -4192,6 +4192,194 @@ static int prepare_allocation(struct btrfs_fs_info *fs_info,
 }
 
 /*
+ * Helper for getting the per inode hint block_group to avoid the full
+ * find_free_extent loop.
+ *
+ * Returns the hint block_group ready to use in the main find_free_extent loop
+ * if the hint is successful, and NULL otherwise.
+ */
+static struct btrfs_block_group *ffe_get_hint_block_group(struct btrfs_fs_info *fs_info,
+							  struct find_free_extent_ctl *ffe_ctl)
+{
+	struct btrfs_block_group *ret = NULL;
+	if (ffe_ctl->hint_byte != ffe_ctl->search_start)
+		return NULL;
+	ret = btrfs_lookup_block_group(fs_info, ffe_ctl->search_start);
+	/*
+	 * we don't want to use the block group if it doesn't match our
+	 * allocation bits, or if its not cached.
+	 *
+	 * However if we are re-searching with an ideal block group
+	 * picked out then we don't care that the block group is cached.
+	 */
+	if (!ret)
+		return NULL;
+	if (!block_group_bits(ret, ffe_ctl->flags) ||
+	    ret->cached == BTRFS_CACHE_NO)
+		goto put_block_group;
+	down_read(&ret->space_info->groups_sem);
+	if (list_empty(&ret->list) || ret->ro) {
+		/*
+		 * someone is removing this block group,
+		 * we can't jump into the have_block_group
+		 * target because our list pointers are not
+		 * valid
+		 */
+		goto up_sem;
+	}
+	ffe_ctl->index = btrfs_bg_flags_to_raid_index(ret->flags);
+	btrfs_lock_block_group(ret, ffe_ctl->delalloc);
+	return ret;
+up_sem:
+	up_read(&ret->space_info->groups_sem);
+put_block_group:
+	btrfs_put_block_group(ret);
+	return NULL;
+}
+
+static int ffe_grab_block_group(struct btrfs_fs_info *fs_info,
+				struct find_free_extent_ctl *ffe_ctl,
+				struct btrfs_block_group *block_group)
+{
+	int ret = 0;
+	/* If the block group is read-only, we can skip it entirely. */
+	if (unlikely(block_group->ro)) {
+		if (ffe_ctl->for_treelog)
+			btrfs_clear_treelog_bg(block_group);
+		if (ffe_ctl->for_data_reloc)
+			btrfs_clear_data_reloc_bg(block_group);
+		ret = 1;
+		goto out;
+	}
+
+	btrfs_grab_block_group(block_group, ffe_ctl->delalloc);
+	ffe_ctl->search_start = block_group->start;
+
+	/*
+	 * this can happen if we end up cycling through all the
+	 * raid types, but we want to make sure we only allocate
+	 * for the proper type.
+	 */
+	if (!block_group_bits(block_group, ffe_ctl->flags)) {
+		u64 extra = BTRFS_BLOCK_GROUP_DUP |
+			BTRFS_BLOCK_GROUP_RAID1_MASK |
+			BTRFS_BLOCK_GROUP_RAID56_MASK |
+			BTRFS_BLOCK_GROUP_RAID10;
+
+		/*
+		 * if they asked for extra copies and this block group
+		 * doesn't provide them, bail.  This does allow us to
+		 * fill raid0 from raid1.
+		 */
+		if ((ffe_ctl->flags & extra) && !(block_group->flags & extra)) {
+			ret = 1;
+			cond_resched();
+			goto release_block_group;
+		}
+
+		/*
+		 * This block group has different flags than we want.
+		 * It's possible that we have MIXED_GROUP flag but no
+		 * block group is mixed.  Just skip such block group.
+		 */
+		ret = 1;
+		goto release_block_group;
+	}
+	return ret;
+release_block_group:
+	btrfs_release_block_group(block_group, ffe_ctl->delalloc);
+out:
+	return ret;
+}
+
+static int ffe_have_block_group(struct btrfs_fs_info *fs_info,
+				struct find_free_extent_ctl *ffe_ctl,
+				struct btrfs_block_group **block_group,
+				struct btrfs_key *ins,
+				int *cache_block_group_error)
+{
+	int ret = 0;
+	struct btrfs_block_group *bg_ret;
+	struct btrfs_block_group *bg = *block_group;
+
+again:
+	ffe_ctl->cached = btrfs_block_group_done(bg);
+	if (unlikely(!ffe_ctl->cached)) {
+		ffe_ctl->have_caching_bg = true;
+		ret = btrfs_cache_block_group(bg, 0);
+
+		/*
+		 * If we get ENOMEM here or something else we want to
+		 * try other block groups, because it may not be fatal.
+		 * However if we can't find anything else we need to
+		 * save our return here so that we return the actual
+		 * error that caused problems, not ENOSPC.
+		 */
+
+		if (ret < 0) {
+			if (!*cache_block_group_error)
+				*cache_block_group_error = ret;
+			return 1;
+		}
+		ret = 0;
+	}
+
+	if (unlikely(bg->cached == BTRFS_CACHE_ERROR))
+		return 1;
+
+	bg_ret = NULL;
+	ret = do_allocation(bg, ffe_ctl, &bg_ret);
+	if (ret == 0) {
+		if (bg_ret && bg_ret != bg) {
+			btrfs_release_block_group(bg, ffe_ctl->delalloc);
+			*block_group = bg_ret;
+			bg = bg_ret;
+		}
+	} else if (ret == -EAGAIN) {
+		goto again;
+	} else if (ret > 0) {
+		return ret;
+	}
+
+	/* Checks */
+	ffe_ctl->search_start = round_up(ffe_ctl->found_offset,
+					 fs_info->stripesize);
+
+	/* move on to the next group */
+	if (ffe_ctl->search_start + ffe_ctl->num_bytes >
+	    bg->start + bg->length) {
+		btrfs_add_free_space_unused(bg,
+				    ffe_ctl->found_offset,
+				    ffe_ctl->num_bytes);
+		return 1;
+	}
+
+	if (ffe_ctl->found_offset < ffe_ctl->search_start)
+		btrfs_add_free_space_unused(bg,
+				ffe_ctl->found_offset,
+				ffe_ctl->search_start - ffe_ctl->found_offset);
+
+	ret = btrfs_add_reserved_bytes(bg, ffe_ctl->ram_bytes,
+				       ffe_ctl->num_bytes,
+				       ffe_ctl->delalloc);
+	if (ret == -EAGAIN) {
+		btrfs_add_free_space_unused(bg,
+				ffe_ctl->found_offset,
+				ffe_ctl->num_bytes);
+		return 1;
+	}
+	btrfs_inc_block_group_reservations(bg);
+
+	/* we are all good, lets return */
+	ins->objectid = ffe_ctl->search_start;
+	ins->offset = ffe_ctl->num_bytes;
+
+	trace_btrfs_reserve_extent(bg, ffe_ctl->search_start,
+				   ffe_ctl->num_bytes);
+	return 0;
+}
+
+/*
  * walks the btree of allocated extents and find a hole of a given size.
  * The key ins is changed to record the hole:
  * ins->objectid == start position
@@ -4270,40 +4458,9 @@ static noinline int find_free_extent(struct btrfs_root *root,
 	ffe_ctl->search_start = max(ffe_ctl->search_start,
 				    first_logical_byte(fs_info));
 	ffe_ctl->search_start = max(ffe_ctl->search_start, ffe_ctl->hint_byte);
-	if (ffe_ctl->search_start == ffe_ctl->hint_byte) {
-		block_group = btrfs_lookup_block_group(fs_info,
-						       ffe_ctl->search_start);
-		/*
-		 * we don't want to use the block group if it doesn't match our
-		 * allocation bits, or if its not cached.
-		 *
-		 * However if we are re-searching with an ideal block group
-		 * picked out then we don't care that the block group is cached.
-		 */
-		if (block_group && block_group_bits(block_group, ffe_ctl->flags) &&
-		    block_group->cached != BTRFS_CACHE_NO) {
-			down_read(&space_info->groups_sem);
-			if (list_empty(&block_group->list) ||
-			    block_group->ro) {
-				/*
-				 * someone is removing this block group,
-				 * we can't jump into the have_block_group
-				 * target because our list pointers are not
-				 * valid
-				 */
-				btrfs_put_block_group(block_group);
-				up_read(&space_info->groups_sem);
-			} else {
-				ffe_ctl->index = btrfs_bg_flags_to_raid_index(
-							block_group->flags);
-				btrfs_lock_block_group(block_group,
-						       ffe_ctl->delalloc);
-				goto have_block_group;
-			}
-		} else if (block_group) {
-			btrfs_put_block_group(block_group);
-		}
-	}
+	block_group = ffe_get_hint_block_group(fs_info, ffe_ctl);
+	if (block_group)
+		goto have_block_group;
 search:
 	ffe_ctl->have_caching_bg = false;
 	if (ffe_ctl->index == btrfs_bg_flags_to_raid_index(ffe_ctl->flags) ||
@@ -4312,125 +4469,17 @@ search:
 	down_read(&space_info->groups_sem);
 	list_for_each_entry(block_group,
 			    &space_info->block_groups[ffe_ctl->index], list) {
-		struct btrfs_block_group *bg_ret;
-
-		/* If the block group is read-only, we can skip it entirely. */
-		if (unlikely(block_group->ro)) {
-			if (ffe_ctl->for_treelog)
-				btrfs_clear_treelog_bg(block_group);
-			if (ffe_ctl->for_data_reloc)
-				btrfs_clear_data_reloc_bg(block_group);
+		ret = ffe_grab_block_group(fs_info, ffe_ctl, block_group);
+		if (ret)
 			continue;
-		}
-
-		btrfs_grab_block_group(block_group, ffe_ctl->delalloc);
-		ffe_ctl->search_start = block_group->start;
-
-		/*
-		 * this can happen if we end up cycling through all the
-		 * raid types, but we want to make sure we only allocate
-		 * for the proper type.
-		 */
-		if (!block_group_bits(block_group, ffe_ctl->flags)) {
-			u64 extra = BTRFS_BLOCK_GROUP_DUP |
-				BTRFS_BLOCK_GROUP_RAID1_MASK |
-				BTRFS_BLOCK_GROUP_RAID56_MASK |
-				BTRFS_BLOCK_GROUP_RAID10;
-
-			/*
-			 * if they asked for extra copies and this block group
-			 * doesn't provide them, bail.  This does allow us to
-			 * fill raid0 from raid1.
-			 */
-			if ((ffe_ctl->flags & extra) && !(block_group->flags & extra))
-				goto loop;
-
-			/*
-			 * This block group has different flags than we want.
-			 * It's possible that we have MIXED_GROUP flag but no
-			 * block group is mixed.  Just skip such block group.
-			 */
-			btrfs_release_block_group(block_group, ffe_ctl->delalloc);
-			continue;
-		}
-
 have_block_group:
-		ffe_ctl->cached = btrfs_block_group_done(block_group);
-		if (unlikely(!ffe_ctl->cached)) {
-			ffe_ctl->have_caching_bg = true;
-			ret = btrfs_cache_block_group(block_group, 0);
-
-			/*
-			 * If we get ENOMEM here or something else we want to
-			 * try other block groups, because it may not be fatal.
-			 * However if we can't find anything else we need to
-			 * save our return here so that we return the actual
-			 * error that caused problems, not ENOSPC.
-			 */
-			if (ret < 0) {
-				if (!cache_block_group_error)
-					cache_block_group_error = ret;
-				ret = 0;
-				goto loop;
-			}
-			ret = 0;
-		}
-
-		if (unlikely(block_group->cached == BTRFS_CACHE_ERROR))
-			goto loop;
-
-		bg_ret = NULL;
-		ret = do_allocation(block_group, ffe_ctl, &bg_ret);
+		ret = ffe_have_block_group(fs_info, ffe_ctl,
+					   &block_group, ins,
+					   &cache_block_group_error);
 		if (ret == 0) {
-			if (bg_ret && bg_ret != block_group) {
-				btrfs_release_block_group(block_group,
-							  ffe_ctl->delalloc);
-				block_group = bg_ret;
-			}
-		} else if (ret == -EAGAIN) {
-			goto have_block_group;
-		} else if (ret > 0) {
-			goto loop;
+			btrfs_release_block_group(block_group, ffe_ctl->delalloc);
+			break;
 		}
-
-		/* Checks */
-		ffe_ctl->search_start = round_up(ffe_ctl->found_offset,
-						 fs_info->stripesize);
-
-		/* move on to the next group */
-		if (ffe_ctl->search_start + ffe_ctl->num_bytes >
-		    block_group->start + block_group->length) {
-			btrfs_add_free_space_unused(block_group,
-					    ffe_ctl->found_offset,
-					    ffe_ctl->num_bytes);
-			goto loop;
-		}
-
-		if (ffe_ctl->found_offset < ffe_ctl->search_start)
-			btrfs_add_free_space_unused(block_group,
-					ffe_ctl->found_offset,
-					ffe_ctl->search_start - ffe_ctl->found_offset);
-
-		ret = btrfs_add_reserved_bytes(block_group, ffe_ctl->ram_bytes,
-					       ffe_ctl->num_bytes,
-					       ffe_ctl->delalloc);
-		if (ret == -EAGAIN) {
-			btrfs_add_free_space_unused(block_group,
-					ffe_ctl->found_offset,
-					ffe_ctl->num_bytes);
-			goto loop;
-		}
-		btrfs_inc_block_group_reservations(block_group);
-
-		/* we are all good, lets return */
-		ins->objectid = ffe_ctl->search_start;
-		ins->offset = ffe_ctl->num_bytes;
-
-		trace_btrfs_reserve_extent(block_group, ffe_ctl->search_start,
-					   ffe_ctl->num_bytes);
-		btrfs_release_block_group(block_group, ffe_ctl->delalloc);
-		break;
-loop:
 		release_block_group(block_group, ffe_ctl, ffe_ctl->delalloc);
 		cond_resched();
 	}
