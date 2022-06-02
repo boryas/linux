@@ -8,15 +8,15 @@
 enum btrfs_block_group_size_class {
 	BTRFS_BG_SZ_NONE,
 	BTRFS_BG_SZ_SMALL,
+	BTRFS_BG_SZ_MEDIUM,
 	BTRFS_BG_SZ_LARGE,
 	BTRFS_NR_BG_SIZE_CLASSES
 };
-enum btrfs_block_group_size_class btrfs_extent_len_to_size_class(u64 len);
+enum btrfs_block_group_size_class btrfs_size_to_size_class(u64 len);
 
 
 struct btrfs_space_slab {
-	struct rw_semaphore slab_sem;
-	struct list_head block_groups[BTRFS_NR_BG_SIZE_CLASSES];
+	struct xarray block_groups[BTRFS_NR_BG_SIZE_CLASSES];
 };
 
 struct btrfs_space_info {

@@ -3403,6 +3403,7 @@ enum btrfs_loop_type {
 	LOOP_CACHING_NOWAIT,
 	LOOP_CACHING_WAIT,
 	LOOP_ALLOC_CHUNK,
+	LOOP_USE_WRONG_SLAB,
 	LOOP_NO_EMPTY_SIZE,
 };
 
@@ -3652,6 +3653,22 @@ refill_cluster:
 	return 1;
 }
 
+static bool slab_allowed(struct find_free_extent_ctl *ffe_ctl,
+			 struct btrfs_block_group *bg)
+{
+	enum btrfs_block_group_size_class size_class = btrfs_size_to_size_class(ffe_ctl->num_bytes);
+
+	if (ffe_ctl->loop >= LOOP_USE_WRONG_SLAB)
+		return true;
+
+	if (bg->flags & BTRFS_BLOCK_GROUP_DATA &&
+	    bg->size_class != BTRFS_BG_SZ_NONE &&
+	    bg->size_class != size_class) {
+		return false;
+	}
+	return true;
+}
+
 /*
  * Return >0 to inform caller that we find nothing
  * Return 0 when we found an free extent and set ffe_ctrl->found_offset
@@ -3662,7 +3679,6 @@ static int find_free_extent_unclustered(struct btrfs_block_group *bg,
 {
 	struct btrfs_free_cluster *last_ptr = ffe_ctl->last_ptr;
 	u64 offset;
-	enum btrfs_block_group_size_class size_class = btrfs_extent_len_to_size_class(ffe_ctl->num_bytes);
 
 	/*
 	 * We are doing an unclustered allocation, set the fragmented flag so
@@ -3689,12 +3705,6 @@ static int find_free_extent_unclustered(struct btrfs_block_group *bg,
 			return 1;
 		}
 		spin_unlock(&free_space_ctl->tree_lock);
-	}
-
-	if (bg->flags & BTRFS_BLOCK_GROUP_DATA &&
-	    bg->size_class != BTRFS_BG_SZ_NONE &&
-	    bg->size_class != size_class) {
-		return 1;
 	}
 
 	offset = btrfs_find_space_for_alloc(bg, ffe_ctl->search_start,
@@ -3728,6 +3738,9 @@ static int do_allocation_clustered(struct btrfs_block_group *block_group,
 				   struct btrfs_block_group **bg_ret)
 {
 	int ret;
+
+	if (!slab_allowed(ffe_ctl, block_group))
+		return 1;
 
 	/* We want to try and use the cluster allocator, so lets look there */
 	if (ffe_ctl->last_ptr && ffe_ctl->use_cluster) {
@@ -4424,6 +4437,8 @@ static noinline int find_free_extent(struct btrfs_root *root,
 	bool full_search = false;
 	struct btrfs_space_slab *space_slab;
 	enum btrfs_block_group_size_class size_class;
+	unsigned long xa_id;
+	void *xa_entry;
 
 	WARN_ON(ffe_ctl->num_bytes < fs_info->sectorsize);
 
@@ -4444,7 +4459,7 @@ static noinline int find_free_extent(struct btrfs_root *root,
 	ffe_ctl->total_free_space = 0;
 	ffe_ctl->found_offset = 0;
 	ffe_ctl->policy = BTRFS_EXTENT_ALLOC_CLUSTERED;
-	size_class = btrfs_extent_len_to_size_class(ffe_ctl->num_bytes);
+	size_class = btrfs_size_to_size_class(ffe_ctl->num_bytes);
 
 	if (btrfs_is_zoned(fs_info))
 		ffe_ctl->policy = BTRFS_EXTENT_ALLOC_ZONED;
@@ -4461,8 +4476,6 @@ static noinline int find_free_extent(struct btrfs_root *root,
 		btrfs_err(fs_info, "No space info for %llu", ffe_ctl->flags);
 		return -ENOSPC;
 	}
-	space_slab = &space_info->space_slabs[ffe_ctl->index];
-
 	ret = prepare_allocation(fs_info, ffe_ctl, space_info, ins);
 	if (ret < 0)
 		return ret;
@@ -4479,30 +4492,24 @@ search:
 	    ffe_ctl->index == 0)
 		full_search = true;
 
-	down_read(&space_slab->slab_sem);
-	list_for_each_entry(block_group,
-			    &space_slab->block_groups[size_class], slab_list) {
+	// TODO: xas_for_each and locking to protect the refcount!?
+	space_slab = &space_info->space_slabs[ffe_ctl->index];
+	xa_for_each(&space_slab->block_groups[size_class], xa_id, xa_entry) {
+		block_group = (struct btrfs_block_group *)xa_entry;
 		ret = ffe_grab_block_group(fs_info, ffe_ctl, block_group);
 		if (ret)
 			continue;
 		ret = ffe_have_block_group(fs_info, ffe_ctl, &block_group, ins,
 					   &cache_block_group_error);
-		if (ret == 0 && ins->objectid)
+		if (ret == 0 && ins->objectid) {
+			btrfs_release_block_group(block_group, ffe_ctl->delalloc);
 			break;
+		}
 		release_block_group(block_group, ffe_ctl, ffe_ctl->delalloc);
 		cond_resched();
 	}
-	up_read(&space_slab->slab_sem);
-	if (ins->objectid) {
-		printk(KERN_INFO "BO: FFE: %d: type %llu; slab success! done\n",
-		       current->pid, space_info->flags & BTRFS_BLOCK_GROUP_TYPE_MASK);
-		down_write(&space_slab->slab_sem);
-		list_add_tail(&block_group->slab_list,
-			      &space_slab->block_groups[size_class]);
-		up_write(&space_slab->slab_sem);
-		btrfs_release_block_group(block_group, ffe_ctl->delalloc);
+	if (ins->objectid)
 		goto done;
-	}
 	down_read(&space_info->groups_sem);
 	list_for_each_entry(block_group,
 			    &space_info->block_groups[ffe_ctl->index], list) {

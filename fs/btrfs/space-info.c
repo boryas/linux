@@ -223,6 +223,7 @@ static int create_space_info(struct btrfs_fs_info *info, u64 flags)
 
 	struct btrfs_space_info *space_info;
 	struct btrfs_space_slab *space_slab;
+	struct xarray *bgs;
 	int i;
 	int j;
 	int ret;
@@ -234,9 +235,9 @@ static int create_space_info(struct btrfs_fs_info *info, u64 flags)
 	for (i = 0; i < BTRFS_NR_RAID_TYPES; i++) {
 		INIT_LIST_HEAD(&space_info->block_groups[i]);
 		space_slab = &space_info->space_slabs[i];
-		init_rwsem(&space_slab->slab_sem);
 		for (j = 0; j < BTRFS_NR_BG_SIZE_CLASSES; j++) {
-			INIT_LIST_HEAD(&space_slab->block_groups[j]);
+			bgs = &space_slab->block_groups[j];
+			xa_init_flags(bgs, XA_FLAGS_ALLOC);
 		}
 	}
 	init_rwsem(&space_info->groups_sem);
@@ -1702,9 +1703,14 @@ int btrfs_reserve_data_bytes(struct btrfs_fs_info *fs_info, u64 bytes,
 	return ret;
 }
 
-enum btrfs_block_group_size_class btrfs_extent_len_to_size_class(u64 len)
+enum btrfs_block_group_size_class btrfs_size_to_size_class(u64 sz)
 {
-	if (len < SZ_256M)
+	// TODO: special thought for compression being 128KiB?
+	// current idea is 1/1024, 1/128, 1/8 as analogs to
+	// 1/1000, 1/100, 1/10
+	if (sz <= SZ_1M)
 		return BTRFS_BG_SZ_SMALL;
+	if (sz <= SZ_8M)
+		return BTRFS_BG_SZ_MEDIUM;
 	return BTRFS_BG_SZ_LARGE;
 }

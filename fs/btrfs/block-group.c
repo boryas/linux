@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include "linux/xarray.h"
 #include <linux/list_sort.h>
 #include "misc.h"
 #include "ctree.h"
@@ -1001,11 +1002,9 @@ int btrfs_remove_block_group(struct btrfs_trans_handle *trans,
 		clear_avail_alloc_bits(fs_info, block_group->flags);
 	}
 	up_write(&space_info->groups_sem);
-
 	space_slab = &space_info->space_slabs[index];
-	down_write(&space_slab->slab_sem);
-	list_del_init(&block_group->slab_list);
-	up_write(&space_slab->slab_sem);
+	xa_erase(&space_slab->block_groups[block_group->size_class],
+		 block_group->xa_id);
 
 	clear_incompat_bg_bits(fs_info, block_group->flags);
 	if (kobj) {
@@ -1662,11 +1661,45 @@ void btrfs_reclaim_bgs(struct btrfs_fs_info *fs_info)
 	spin_unlock(&fs_info->unused_bgs_lock);
 }
 
+static int set_block_group_size_class(struct btrfs_block_group *bg,
+				      enum btrfs_block_group_size_class size_class)
+{
+	int index = btrfs_bg_flags_to_raid_index(bg->flags);
+	struct btrfs_space_slab *space_slab = &bg->space_info->space_slabs[index];
+	struct xarray *xa_new = &space_slab->block_groups[size_class];
+	int ret = 0;
+
+	/* already correct; no-op */
+	if (bg->size_class == size_class)
+		goto out;
+
+	/* race with another first allocation; loser retries */
+	if (bg->size_class != BTRFS_BG_SZ_NONE)
+	{
+		ret = -EAGAIN;
+		goto out;
+	}
+
+	ret = xa_alloc(xa_new, &bg->xa_id, bg, xa_limit_32b, GFP_NOFS);
+	if (ret)
+		goto out;
+	bg->size_class = size_class;
+out:
+	return ret;
+}
+
+static void clear_block_group_size_class(struct btrfs_block_group *bg)
+{
+	int index = btrfs_bg_flags_to_raid_index(bg->flags);
+	struct btrfs_space_slab *space_slab = &bg->space_info->space_slabs[index];
+	struct xarray *xa_old = &space_slab->block_groups[bg->size_class];
+
+	xa_erase(xa_old, bg->xa_id);
+}
+
 void btrfs_mark_bg_to_reclaim(struct btrfs_block_group *bg)
 {
 	struct btrfs_fs_info *fs_info = bg->fs_info;
-	struct btrfs_space_slab *space_slab;
-	int index = btrfs_bg_flags_to_raid_index(bg->flags);
 
 	spin_lock(&fs_info->unused_bgs_lock);
 	if (list_empty(&bg->bg_list)) {
@@ -1675,10 +1708,6 @@ void btrfs_mark_bg_to_reclaim(struct btrfs_block_group *bg)
 		list_add_tail(&bg->bg_list, &fs_info->reclaim_bgs);
 	}
 	spin_unlock(&fs_info->unused_bgs_lock);
-	space_slab = &bg->space_info->space_slabs[index];
-	down_write(&space_slab->slab_sem);
-	list_del_init(&bg->slab_list);
-	up_write(&space_slab->slab_sem);
 }
 
 static int read_bg_from_eb(struct btrfs_fs_info *fs_info, struct btrfs_key *key,
@@ -1956,7 +1985,6 @@ static struct btrfs_block_group *btrfs_create_block_group_cache(
 	INIT_LIST_HEAD(&cache->dirty_list);
 	INIT_LIST_HEAD(&cache->io_list);
 	INIT_LIST_HEAD(&cache->active_bg_list);
-	INIT_LIST_HEAD(&cache->slab_list);
 	btrfs_init_free_space_ctl(cache, cache->free_space_ctl);
 	atomic_set(&cache->frozen, 0);
 	mutex_init(&cache->free_space_lock);
@@ -3314,6 +3342,7 @@ int btrfs_update_block_group(struct btrfs_trans_handle *trans,
 		byte_in_group = bytenr - cache->start;
 		WARN_ON(byte_in_group > cache->length);
 
+
 		spin_lock(&cache->space_info->lock);
 		spin_lock(&cache->lock);
 
@@ -3342,8 +3371,9 @@ int btrfs_update_block_group(struct btrfs_trans_handle *trans,
 			cache->space_info->disk_used -= num_bytes * factor;
 
 			reclaim = should_reclaim_block_group(cache, num_bytes);
-			if (cache->used == 0)
-				cache->size_class = BTRFS_BG_SZ_NONE;
+			if (old_val == 0)
+				clear_block_group_size_class(cache);
+
 			spin_unlock(&cache->lock);
 			spin_unlock(&cache->space_info->lock);
 
@@ -3395,11 +3425,14 @@ int btrfs_update_block_group(struct btrfs_trans_handle *trans,
  * This is called by the allocator when it reserves space. If this is a
  * reservation and the block group has become read only we cannot make the
  * reservation and return -EAGAIN, otherwise this function always succeeds.
+ *
+ * TODO comment on new success criteria..
  */
 int btrfs_add_reserved_bytes(struct btrfs_block_group *cache,
 			     u64 ram_bytes, u64 num_bytes, int delalloc)
 {
 	struct btrfs_space_info *space_info = cache->space_info;
+	enum btrfs_block_group_size_class size_class;
 	int ret = 0;
 
 	spin_lock(&space_info->lock);
@@ -3422,8 +3455,8 @@ int btrfs_add_reserved_bytes(struct btrfs_block_group *cache,
 		 */
 		if (num_bytes < ram_bytes)
 			btrfs_try_granting_tickets(cache->fs_info, space_info);
-		if (cache->size_class == BTRFS_BG_SZ_NONE)
-			cache->size_class = btrfs_extent_len_to_size_class(num_bytes);
+		size_class = btrfs_size_to_size_class(num_bytes);
+		ret = set_block_group_size_class(cache, size_class);
 	}
 	spin_unlock(&cache->lock);
 	spin_unlock(&space_info->lock);

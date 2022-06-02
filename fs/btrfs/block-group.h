@@ -216,7 +216,7 @@ struct btrfs_block_group {
 	struct work_struct zone_finish_work;
 	struct extent_buffer *last_eb;
 	enum btrfs_block_group_size_class size_class;
-	struct list_head slab_list;
+	u32 xa_id;
 };
 
 static inline u64 btrfs_block_group_end(struct btrfs_block_group *block_group)
