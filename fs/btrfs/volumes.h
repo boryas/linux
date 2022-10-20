@@ -522,6 +522,7 @@ struct btrfs_device_info {
 	u64 dev_offset;
 	u64 max_avail;
 	u64 total_avail;
+	u64 used;
 };
 
 struct btrfs_raid_attr {
