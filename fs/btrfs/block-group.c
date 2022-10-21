@@ -1555,6 +1555,9 @@ static bool should_reclaim_block_group(struct btrfs_block_group *bg, u64 bytes_f
 	if (reclaim_thresh == 0)
 		return false;
 
+	if (!list_empty(&bg->hot_list))
+		return false;
+
 	thresh = mult_perc(bg->length, reclaim_thresh);
 
 	/*
