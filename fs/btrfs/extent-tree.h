@@ -82,6 +82,9 @@ struct find_free_extent_ctl {
 
 	/* Size class of block groups to prefer in early loops */
 	enum btrfs_block_group_size_class size_class;
+
+	/* First caching error we see */
+	int cache_block_group_error;
 };
 
 enum btrfs_inline_ref_type {
