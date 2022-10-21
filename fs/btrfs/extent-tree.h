@@ -81,6 +81,15 @@ struct find_free_extent_ctl {
 
 	/* First caching error we see */
 	int cache_block_group_error;
+
+	/* Whether or not we are allocating from a hot block group */
+	bool hot;
+
+	/* Whether or not a block group did bad enough to be cooled */
+	bool need_cooling;
+
+	/* Block group we need to add to hot */
+	struct btrfs_block_group *new_hot;
 };
 
 enum btrfs_inline_ref_type {

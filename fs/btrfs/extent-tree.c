@@ -4220,6 +4220,12 @@ again:
 	} else if (ret == -EAGAIN) {
 		goto again;
 	} else if (ret > 0) {
+		if (ffe_ctl->hot) {
+			trace_find_free_extent_hot_alloc_fail(root, ffe_ctl, bg);
+			bg->alloc_failure_count++;
+			if (bg->alloc_failure_count >= 10)
+				ffe_ctl->need_cooling = true;
+		}
 		return ret;
 	}
 
@@ -4289,6 +4295,8 @@ static noinline int find_free_extent(struct btrfs_root *root,
 	struct btrfs_block_group *block_group = NULL;
 	struct btrfs_space_info *space_info;
 	bool full_search = false;
+	int only;
+	int i = 0;
 
 	WARN_ON(ffe_ctl->num_bytes < fs_info->sectorsize);
 
@@ -4361,12 +4369,40 @@ static noinline int find_free_extent(struct btrfs_root *root,
 				btrfs_lock_block_group(block_group,
 						       ffe_ctl->delalloc);
 				ffe_ctl->hinted = true;
+				if (!list_empty(&block_group->hot_list))
+					ffe_ctl->hot = true;
 				goto have_block_group;
 			}
 		} else if (block_group) {
 			btrfs_put_block_group(block_group);
 		}
 	}
+	ffe_ctl->hot = true;
+	down_read(&space_info->hot_groups_sem);
+	only = get_random_u8() % (space_info->hot_groups_count ? : 1);
+hot:
+	list_for_each_entry(block_group, &space_info->hot_block_groups, hot_list) {
+		if (only && i < only) {
+			i++;
+			continue;
+		} else if (only && i > only) {
+			only = 0;
+			goto hot;
+		}
+		ret = ffe_grab_block_group(ffe_ctl, block_group);
+		if (ret)
+			continue;
+		ret = ffe_try_block_group(root, ffe_ctl, &block_group);
+		if (!ret) {
+			up_read(&space_info->hot_groups_sem);
+			btrfs_release_block_group(block_group, ffe_ctl->delalloc);
+			found_extent(ffe_ctl, ins);
+			goto out;
+		}
+		btrfs_release_block_group(block_group, ffe_ctl->delalloc);
+	}
+
+	up_read(&space_info->hot_groups_sem);
 search:
 	trace_find_free_extent_search_loop(root, ffe_ctl);
 	ffe_ctl->have_caching_bg = false;
@@ -4384,7 +4420,9 @@ have_block_group:
 		trace_find_free_extent_have_block_group(root, ffe_ctl, block_group);
 		ret = ffe_try_block_group(root, ffe_ctl, &block_group);
 		if (!ret) {
+			/* extra reference for 'new_hot' */
 			btrfs_get_block_group(block_group);
+			ffe_ctl->new_hot = block_group;
 			up_read(&space_info->groups_sem);
 			btrfs_release_block_group(block_group, ffe_ctl->delalloc);
 			found_extent(ffe_ctl, ins);
@@ -4414,6 +4452,13 @@ have_block_group:
 		ret = ffe_ctl->cache_block_group_error;
 	}
 out:
+	if (ffe_ctl->need_cooling)
+		btrfs_cool_block_groups(fs_info);
+	if (ffe_ctl->new_hot) {
+		btrfs_add_hot_block_group(ffe_ctl->new_hot);
+		/* drop the new_hot reference */
+		btrfs_put_block_group(ffe_ctl->new_hot);
+	}
 	return ret;
 }
 

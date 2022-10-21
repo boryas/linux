@@ -155,6 +155,10 @@ struct btrfs_space_info {
 	struct list_head block_groups[BTRFS_NR_RAID_TYPES];
 	int groups_count;
 
+	struct rw_semaphore hot_groups_sem;
+	int hot_groups_count;
+	struct list_head hot_block_groups;
+
 	struct kobject kobj;
 	struct kobject *block_group_kobjs[BTRFS_NR_RAID_TYPES];
 };
@@ -241,5 +245,8 @@ u64 btrfs_account_ro_block_groups_free_space(struct btrfs_space_info *sinfo);
 
 int btrfs_min_block_groups(struct btrfs_fs_info *fs_info,
 			   struct btrfs_space_info *space_info);
+void btrfs_add_hot_block_group(struct btrfs_block_group *block_group);
+void btrfs_cool_block_group(struct btrfs_block_group *block_group);
+void btrfs_cool_block_groups(struct btrfs_fs_info *fs_info);
 
 #endif /* BTRFS_SPACE_INFO_H */

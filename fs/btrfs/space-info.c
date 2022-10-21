@@ -236,6 +236,8 @@ static int create_space_info(struct btrfs_fs_info *info, u64 flags)
 	for (i = 0; i < BTRFS_NR_RAID_TYPES; i++)
 		INIT_LIST_HEAD(&space_info->block_groups[i]);
 	init_rwsem(&space_info->groups_sem);
+	INIT_LIST_HEAD(&space_info->hot_block_groups);
+	init_rwsem(&space_info->hot_groups_sem);
 	spin_lock_init(&space_info->lock);
 	space_info->flags = flags & BTRFS_BLOCK_GROUP_TYPE_MASK;
 	space_info->force_alloc = CHUNK_ALLOC_NO_FORCE;
@@ -1865,4 +1867,54 @@ int btrfs_min_block_groups(struct btrfs_fs_info *fs_info,
 
 	bg_min_devs = bg_min_devs ? : 1;
 	return max(5, num_devs / bg_min_devs);
+}
+
+void btrfs_add_hot_block_group(struct btrfs_block_group *block_group)
+{
+	struct btrfs_fs_info *fs_info = block_group->fs_info;
+	struct btrfs_space_info *space_info = block_group->space_info;
+
+	down_write(&space_info->hot_groups_sem);
+	if (space_info->hot_groups_count < btrfs_min_block_groups(fs_info, space_info)) {
+		spin_lock(&block_group->lock);
+		if (list_empty(&block_group->hot_list)) {
+			list_add_tail(&block_group->hot_list,
+				      &space_info->hot_block_groups);
+			space_info->hot_groups_count++;
+			printk(KERN_INFO "BO: cold block group %llu is now hot. hot count: %d\n", block_group->start, space_info->hot_groups_count);
+		}
+		spin_unlock(&block_group->lock);
+	}
+	up_write(&space_info->hot_groups_sem);
+}
+
+void btrfs_cool_block_group(struct btrfs_block_group *block_group)
+{
+	struct btrfs_space_info *space_info = block_group->space_info;
+
+	lockdep_assert_held(&space_info->hot_groups_sem);
+	spin_lock(&block_group->lock);
+	if (!list_empty(&block_group->hot_list) && block_group->alloc_failure_count >= 10) {
+		list_del_init(&block_group->hot_list);
+		space_info->hot_groups_count--;
+		printk(KERN_INFO "BO: hot block group %llu is now cold (%d). hot count: %d\n", block_group->start, block_group->alloc_failure_count, space_info->hot_groups_count);
+	}
+	spin_unlock(&block_group->lock);
+}
+
+void btrfs_cool_block_groups(struct btrfs_fs_info *fs_info)
+{
+	struct btrfs_space_info *space_info;
+	struct btrfs_block_group *block_group;
+	struct btrfs_block_group *tmp;
+
+	list_for_each_entry(space_info, &fs_info->space_info, list) {
+		down_write(&space_info->hot_groups_sem);
+		list_for_each_entry_safe(block_group, tmp, &space_info->hot_block_groups, hot_list) {
+			// TODO configurable or smart. (ensure frag errors..)
+			if (block_group->alloc_failure_count)
+				btrfs_cool_block_group(block_group);
+		}
+		up_write(&space_info->hot_groups_sem);
+	}
 }
