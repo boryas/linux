@@ -78,6 +78,9 @@ struct find_free_extent_ctl {
 
 	/* Whether or not the allocator is currently following a hint */
 	bool hinted;
+
+	/* First caching error we see */
+	int cache_block_group_error;
 };
 
 enum btrfs_inline_ref_type {
