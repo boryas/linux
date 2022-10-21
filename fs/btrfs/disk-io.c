@@ -1864,6 +1864,9 @@ static int cleaner_kthread(void *arg)
 		 * space.
 		 */
 		btrfs_reclaim_bgs(fs_info);
+
+		printk(KERN_INFO "BO: cleaner kthread ensure min bgs\n");
+		btrfs_ensure_min_bgs(fs_info);
 sleep:
 		clear_and_wake_up_bit(BTRFS_FS_CLEANER_RUNNING, &fs_info->flags);
 		if (kthread_should_park())
@@ -3304,6 +3307,7 @@ int btrfs_start_pre_rw_mount(struct btrfs_fs_info *fs_info)
 		}
 	}
 
+	btrfs_ensure_min_bgs(fs_info);
 out:
 	return ret;
 }

@@ -153,6 +153,7 @@ struct btrfs_space_info {
 	struct rw_semaphore groups_sem;
 	/* for block groups in our same type */
 	struct list_head block_groups[BTRFS_NR_RAID_TYPES];
+	int groups_count;
 
 	struct kobject kobj;
 	struct kobject *block_group_kobjs[BTRFS_NR_RAID_TYPES];
@@ -237,5 +238,8 @@ int btrfs_reserve_data_bytes(struct btrfs_fs_info *fs_info, u64 bytes,
 void btrfs_dump_space_info_for_trans_abort(struct btrfs_fs_info *fs_info);
 void btrfs_init_async_reclaim_work(struct btrfs_fs_info *fs_info);
 u64 btrfs_account_ro_block_groups_free_space(struct btrfs_space_info *sinfo);
+
+int btrfs_min_block_groups(struct btrfs_fs_info *fs_info,
+			   struct btrfs_space_info *space_info);
 
 #endif /* BTRFS_SPACE_INFO_H */

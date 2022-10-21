@@ -979,6 +979,7 @@ int btrfs_remove_block_group(struct btrfs_trans_handle *trans,
 	 * are still on the list after taking the semaphore
 	 */
 	list_del_init(&block_group->list);
+	block_group->space_info->groups_count--;
 	if (list_empty(&block_group->space_info->block_groups[index])) {
 		kobj = block_group->space_info->block_group_kobjs[index];
 		block_group->space_info->block_group_kobjs[index] = NULL;
@@ -1713,6 +1714,35 @@ void btrfs_reclaim_bgs(struct btrfs_fs_info *fs_info)
 	if (!list_empty(&fs_info->reclaim_bgs))
 		queue_work(system_unbound_wq, &fs_info->reclaim_bgs_work);
 	spin_unlock(&fs_info->unused_bgs_lock);
+}
+
+void btrfs_ensure_min_bgs(struct btrfs_fs_info *fs_info) {
+	struct btrfs_space_info *space_info;
+	int diff;
+	int i;
+	struct btrfs_root *root;
+	struct btrfs_trans_handle *trans;
+
+	printk(KERN_INFO "BO: ensure min bgs\n");
+	root = btrfs_block_group_root(fs_info);
+	list_for_each_entry(space_info, &fs_info->space_info, list) {
+		// TODO: atomic counter?
+		down_read(&space_info->groups_sem);
+		printk(KERN_INFO "BO: ensure min bgs %llu %d\n", space_info->flags, btrfs_min_block_groups(fs_info, space_info));
+		diff = btrfs_min_block_groups(fs_info, space_info) - space_info->groups_count;
+		up_read(&space_info->groups_sem);
+		for (i = 0; i < diff; i++) {
+			printk(KERN_INFO "BO: ensure min bgs force alloc %llu %d\n", space_info->flags, space_info->groups_count);
+			// TODO figure this out
+			// root? (tree_root in sysfs)
+			// one txn for all diff chunks
+			// count per chunk?
+			trans = btrfs_start_transaction(root, 0);
+			// TODO handle non ENOSPC errors?
+			btrfs_force_chunk_alloc(trans, space_info->flags);
+			btrfs_end_transaction(trans);
+		}
+	}
 }
 
 void btrfs_mark_bg_to_reclaim(struct btrfs_block_group *bg)
@@ -4099,6 +4129,7 @@ int btrfs_free_block_groups(struct btrfs_fs_info *info)
 
 		down_write(&block_group->space_info->groups_sem);
 		list_del(&block_group->list);
+		block_group->space_info->groups_count--;
 		up_write(&block_group->space_info->groups_sem);
 
 		/*

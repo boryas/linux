@@ -288,6 +288,7 @@ void btrfs_mark_bg_unused(struct btrfs_block_group *bg);
 void btrfs_reclaim_bgs_work(struct work_struct *work);
 void btrfs_reclaim_bgs(struct btrfs_fs_info *fs_info);
 void btrfs_mark_bg_to_reclaim(struct btrfs_block_group *bg);
+void btrfs_ensure_min_bgs(struct btrfs_fs_info *fs_info);
 int btrfs_read_block_groups(struct btrfs_fs_info *info);
 struct btrfs_block_group *btrfs_make_block_group(struct btrfs_trans_handle *trans,
 						 u64 bytes_used, u64 type,

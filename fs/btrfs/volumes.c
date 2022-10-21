@@ -198,6 +198,13 @@ int btrfs_nr_parity_stripes(u64 type)
 	return btrfs_raid_array[index].nparity;
 }
 
+int btrfs_nr_min_devs(u64 type)
+{
+	enum btrfs_raid_types index = btrfs_bg_flags_to_raid_index(type);
+
+	return btrfs_raid_array[index].devs_min;
+}
+
 /*
  * Fill @buf with textual description of @bg_flags, no more than @size_buf
  * bytes including terminating null byte.
@@ -2789,6 +2796,9 @@ int btrfs_init_new_device(struct btrfs_fs_info *fs_info, const char *device_path
 		}
 		ret = btrfs_commit_transaction(trans);
 	}
+
+	printk(KERN_INFO "BO: add a dev; ensure min bgs\n");
+	btrfs_ensure_min_bgs(fs_info);
 
 	/*
 	 * Now that we have written a new super block to this device, check all

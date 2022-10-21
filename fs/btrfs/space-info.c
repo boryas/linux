@@ -325,6 +325,7 @@ void btrfs_add_bg_to_space_info(struct btrfs_fs_info *info,
 	index = btrfs_bg_flags_to_raid_index(block_group->flags);
 	down_write(&found->groups_sem);
 	list_add_tail(&block_group->list, &found->block_groups[index]);
+	found->groups_count++;
 	up_write(&found->groups_sem);
 }
 
@@ -1848,4 +1849,20 @@ u64 btrfs_account_ro_block_groups_free_space(struct btrfs_space_info *sinfo)
 	spin_unlock(&sinfo->lock);
 
 	return free_bytes;
+}
+
+// TODO: match chunk alloc algorithm more closely
+// TODO: intelligent config/calc instead of "max(5, dev_para)"
+// i.e., do you really want nr_devs bgs for metadata?!
+int btrfs_min_block_groups(struct btrfs_fs_info *fs_info,
+			   struct btrfs_space_info *space_info)
+{
+	int bg_min_devs = btrfs_nr_min_devs(space_info->flags);
+	int num_devs = fs_info->fs_devices->rw_devices;
+
+	if (space_info->flags & BTRFS_BLOCK_GROUP_SYSTEM)
+		return 1;
+
+	bg_min_devs = bg_min_devs ? : 1;
+	return max(5, num_devs / bg_min_devs);
 }
