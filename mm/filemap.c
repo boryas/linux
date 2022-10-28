@@ -863,8 +863,19 @@ noinline int __filemap_add_folio(struct address_space *mapping,
 
 	gfp &= GFP_RECLAIM_MASK;
 	folio_ref_add(folio, nr);
+	// TODO: allow mismatched mapping for shared folios?
+	// TODO: or change it entirely to store an entry, not a folio.
+	if (mapping->a_ops->shared_mapping &&
+	    (mapping == mapping->a_ops->shared_mapping(mapping) ||
+	     folio->mapping == mapping->a_ops->shared_mapping(mapping))
+	    && folio->mapping != mapping)
+		printk(KERN_INFO "BO: %d: re-map folio %lu %lu %p to shared mapping %lu %p\n", current->pid, folio->mapping->host->i_ino, folio->index, folio->mapping, mapping->host->i_ino, mapping);
+	if (!mapping)
+		printk(KERN_INFO "BO: %d: set mapping to null! %lu\n", current->pid, index);
 	folio->mapping = mapping;
 	folio->index = xas.xa_index;
+	if (mapping->a_ops->shared_mapping)
+		printk(KERN_INFO "BO: %d: set %p mapping to %p %lu\n", current->pid, folio, folio->mapping, folio->index);
 
 	do {
 		unsigned int order = xa_get_order(xas.xa, xas.xa_index);
@@ -2272,11 +2283,16 @@ static void filemap_get_read_batch(struct address_space *mapping,
 {
 	XA_STATE(xas, &mapping->i_pages, index);
 	struct folio *folio;
+	bool dbg = mapping->a_ops->shared_mapping;
 
 	rcu_read_lock();
 	for (folio = xas_load(&xas); folio; folio = xas_next(&xas)) {
 		if (xas_retry(&xas, folio))
+		{
+			if (dbg)
+				printk(KERN_INFO "BO: %d: skip %lu due to xas_retry\n", current->pid, folio->index);
 			continue;
+		}
 		if (xas.xa_index > max || xa_is_value(folio))
 			break;
 		if (xa_is_sibling(folio))
@@ -2293,7 +2309,7 @@ static void filemap_get_read_batch(struct address_space *mapping,
 			break;
 		if (folio_test_readahead(folio))
 			break;
-		xas_advance(&xas, folio_next_index(folio) - 1);
+		xas_advance(&xas, xas.xa_index + folio_nr_pages(folio) - 1);
 		continue;
 put_folio:
 		folio_put(folio);
@@ -2477,6 +2493,7 @@ static int filemap_get_pages(struct kiocb *iocb, size_t count,
 		struct folio_batch *fbatch, bool need_uptodate)
 {
 	struct file *filp = iocb->ki_filp;
+	// TODO: can we pick the right mapping here?
 	struct address_space *mapping = filp->f_mapping;
 	struct file_ra_state *ra = &filp->f_ra;
 	pgoff_t index = iocb->ki_pos >> PAGE_SHIFT;
@@ -2491,6 +2508,17 @@ retry:
 		return -EINTR;
 
 	filemap_get_read_batch(mapping, index, last_index - 1, fbatch);
+	if (!folio_batch_count(fbatch) && mapping->a_ops->shared_mapping) {
+		struct address_space *shared_mapping;
+		unsigned long shared_index;
+
+		// TODO: swap mapping?
+		shared_mapping = mapping->a_ops->shared_mapping(mapping);
+		shared_index = mapping->a_ops->shared_index(mapping, iocb->ki_pos);
+		// TODO: better end calc
+		filemap_get_read_batch(shared_mapping, shared_index, shared_index + (iter->count >> PAGE_SHIFT), fbatch);
+		printk(KERN_INFO "BO: %d: tried to get shared mapping. %lu shared_index. Got: %d folios.\n", current->pid, shared_index, folio_batch_count(fbatch));
+	}
 	if (!folio_batch_count(fbatch)) {
 		if (iocb->ki_flags & IOCB_NOIO)
 			return -EAGAIN;
@@ -2524,6 +2552,9 @@ retry:
 			goto err;
 	}
 
+	if (mapping && mapping->a_ops->shared_mapping) {
+		printk(KERN_INFO "BO: %d: get_pages return fbatch %d %lu mappings: %p %lu %p %lu\n", current->pid, folio_batch_count(fbatch), folio->index, folio->mapping, folio->mapping->host->i_ino, mapping, mapping->host->i_ino);
+	}
 	return 0;
 err:
 	if (err < 0)
@@ -2604,7 +2635,11 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 		 */
 		isize = i_size_read(inode);
 		if (unlikely(iocb->ki_pos >= isize))
+		{
+			if (mapping->a_ops->shared_mapping)
+				printk(KERN_INFO "BO: %d: past size; put folios. %llu %llu\n", current->pid, iocb->ki_pos, isize);
 			goto put_folios;
+		}
 		end_offset = min_t(loff_t, isize, iocb->ki_pos + iter->count);
 
 		/*
@@ -2629,7 +2664,11 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 					     fsize - offset);
 			size_t copied;
 
-			if (end_offset < folio_pos(folio))
+			if (mapping->a_ops->shared_mapping)
+				printk(KERN_INFO "BO: %d: want to copy folio %p %lu %lu at pos %llu\n", current->pid, folio, folio->mapping->host->i_ino, folio->index, iocb->ki_pos);
+			// TODO: bounds check when folio is shared
+			if (end_offset < folio_pos(folio) &&
+			    folio->mapping == mapping)
 				break;
 			if (i > 0)
 				folio_mark_accessed(folio);
@@ -2642,6 +2681,8 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 				flush_dcache_folio(folio);
 
 			copied = copy_folio_to_iter(folio, offset, bytes, iter);
+			if (folio->mapping->a_ops->shared_mapping)
+				printk(KERN_INFO "BO: %d: copied %lu bytes folio %p %lu %lu at pos %llu\n", current->pid, copied, folio, folio->mapping->host->i_ino, folio->index, iocb->ki_pos);
 
 			already_read += copied;
 			iocb->ki_pos += copied;

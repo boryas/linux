@@ -255,6 +255,15 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 			i = ractl->_index + ractl->_nr_pages - index - 1;
 			continue;
 		}
+		if (mapping->a_ops->shared_mapping) {
+			struct address_space *shared_mapping;
+			unsigned long shared_index;
+
+			shared_mapping = mapping->a_ops->shared_mapping(mapping);
+			shared_index = mapping->a_ops->shared_index(mapping, index + i);
+			filemap_add_folio(shared_mapping, folio, shared_index, gfp_mask);
+			printk(KERN_INFO "BO: %d: stored shared mapping %p %lu %lu %lu %p %lu\n", current->pid, folio, folio->index, mapping->host->i_ino, shared_index, shared_mapping, shared_mapping->host->i_ino);
+		}
 		if (i == nr_to_read - lookahead_size)
 			folio_set_readahead(folio);
 		ractl->_workingset |= folio_test_workingset(folio);
