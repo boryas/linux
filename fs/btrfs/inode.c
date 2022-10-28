@@ -10912,6 +10912,66 @@ void btrfs_assert_inode_range_clean(struct btrfs_inode *inode, u64 start, u64 en
 	ASSERT(ordered == NULL);
 }
 
+static struct address_space *btrfs_shared_mapping(struct address_space *mapping)
+{
+	struct btrfs_inode *inode = BTRFS_I(mapping->host);
+	struct btrfs_fs_info *fs_info = inode->root->fs_info;
+
+	return fs_info->extent_cache_inode->i_mapping;
+}
+
+// TODO: handle len
+static pgoff_t btrfs_shared_index(struct address_space *mapping, unsigned long index)
+{
+	struct btrfs_inode *inode = BTRFS_I(mapping->host);
+	struct extent_map *em;
+	pgoff_t ret;
+	loff_t pos = index << PAGE_SHIFT;
+
+	em = btrfs_get_extent(inode, NULL, 0, pos, 1);
+	// TODO: what do for these also
+	// LAST_BYTE and DELALLOC
+	// is 0 a good return val?!
+	if (em->block_start == EXTENT_MAP_HOLE ||
+	    em->block_start == EXTENT_MAP_INLINE)
+		ret = 0;
+	else {
+		ret = (em->block_start + (pos - em->start)) >> PAGE_SHIFT;
+		printk(KERN_INFO "BO: %d: lookup shared index %lu %llu. found %llu %llu. return %lu\n", current->pid, index, pos, em->block_start, em->start, ret);
+	}
+	free_extent_map(em);
+	return ret;
+}
+
+void btrfs_init_extent_cache_inode(struct btrfs_fs_info *fs_info)
+{
+	struct inode *inode = fs_info->extent_cache_inode;
+	unsigned long hash = btrfs_inode_hash(BTRFS_EXTENT_CACHE_INODE_OBJECTID,
+					      fs_info->tree_root);
+
+	inode->i_ino = BTRFS_EXTENT_CACHE_INODE_OBJECTID;
+	set_nlink(inode, 1);
+	/*
+	 * we set the i_size on the extent cache inode to the max possible int.
+	 * the real end of the address space is determined by all of
+	 * the devices in the system
+	 */
+	inode->i_size = OFFSET_MAX;
+
+	RB_CLEAR_NODE(&BTRFS_I(inode)->rb_node);
+	extent_io_tree_init(fs_info, &BTRFS_I(inode)->io_tree,
+			    IO_TREE_INODE_IO, NULL);
+	extent_map_tree_init(&BTRFS_I(inode)->extent_tree);
+
+	BTRFS_I(inode)->root = btrfs_grab_root(fs_info->tree_root);
+	BTRFS_I(inode)->location.objectid = BTRFS_BTREE_INODE_OBJECTID;
+	BTRFS_I(inode)->location.type = 0;
+	BTRFS_I(inode)->location.offset = 0;
+	set_bit(BTRFS_INODE_DUMMY, &BTRFS_I(inode)->runtime_flags);
+	__insert_inode_hash(inode, hash);
+}
+
+
 static const struct inode_operations btrfs_dir_inode_operations = {
 	.getattr	= btrfs_getattr,
 	.lookup		= btrfs_lookup,
@@ -10970,6 +11030,8 @@ static const struct address_space_operations btrfs_aops = {
 	.error_remove_page = generic_error_remove_page,
 	.swap_activate	= btrfs_swap_activate,
 	.swap_deactivate = btrfs_swap_deactivate,
+	.shared_mapping = btrfs_shared_mapping,
+	.shared_index = btrfs_shared_index,
 };
 
 static const struct inode_operations btrfs_file_inode_operations = {

@@ -1932,6 +1932,7 @@ static int btrfs_init_btree_inode(struct super_block *sb)
 	return 0;
 }
 
+
 static void btrfs_init_dev_replace_locks(struct btrfs_fs_info *fs_info)
 {
 	mutex_init(&fs_info->dev_replace.lock_finishing_cancel_unmount);
@@ -3208,6 +3209,14 @@ int __cold open_ctree(struct super_block *sb, struct btrfs_fs_devices *fs_device
 	if (ret)
 		goto fail;
 
+	fs_info->extent_cache_inode = new_inode(sb);
+	if (!fs_info->extent_cache_inode) {
+		err = -ENOMEM;
+		goto fail;
+	}
+	mapping_set_gfp_mask(fs_info->extent_cache_inode->i_mapping, GFP_NOFS);
+	btrfs_init_extent_cache_inode(fs_info);
+
 	invalidate_bdev(fs_devices->latest_dev->bdev);
 
 	/*
@@ -4366,6 +4375,7 @@ void __cold close_ctree(struct btrfs_fs_info *fs_info)
 	btrfs_free_block_groups(fs_info);
 
 	iput(fs_info->btree_inode);
+	iput(fs_info->extent_cache_inode);
 
 	btrfs_mapping_tree_free(fs_info);
 	btrfs_close_devices(fs_info->fs_devices);

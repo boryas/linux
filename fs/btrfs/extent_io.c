@@ -977,9 +977,9 @@ __get_extent_map(struct inode *inode, struct page *page, size_t pg_offset,
  * return 0 on success, otherwise return error
  */
 static int btrfs_do_readpage(struct page *page, struct extent_map **em_cached,
-		      struct btrfs_bio_ctrl *bio_ctrl, u64 *prev_em_start)
+		      struct btrfs_bio_ctrl *bio_ctrl, u64 *prev_em_start,
+		      struct inode *inode)
 {
-	struct inode *inode = page->mapping->host;
 	struct btrfs_fs_info *fs_info = btrfs_sb(inode->i_sb);
 	u64 start = page_offset(page);
 	const u64 end = start + PAGE_SIZE - 1;
@@ -1138,7 +1138,8 @@ int btrfs_read_folio(struct file *file, struct folio *folio)
 
 	btrfs_lock_and_flush_ordered_range(inode, start, end, NULL);
 
-	ret = btrfs_do_readpage(page, NULL, &bio_ctrl, NULL);
+	printk(KERN_INFO "BO: %d: read_folio do readpage %lu %p\n", current->pid, page->index, page->mapping);
+	ret = btrfs_do_readpage(page, NULL, &bio_ctrl, NULL, page->mapping->host);
 	/*
 	 * If btrfs_do_readpage() failed we will want to submit the assembled
 	 * bio to do the cleanup.
@@ -1151,16 +1152,17 @@ static inline void contiguous_readpages(struct page *pages[], int nr_pages,
 					u64 start, u64 end,
 					struct extent_map **em_cached,
 					struct btrfs_bio_ctrl *bio_ctrl,
-					u64 *prev_em_start)
+					u64 *prev_em_start,
+					struct btrfs_inode *inode)
 {
-	struct btrfs_inode *inode = BTRFS_I(pages[0]->mapping->host);
 	int index;
 
 	btrfs_lock_and_flush_ordered_range(inode, start, end, NULL);
 
 	for (index = 0; index < nr_pages; index++) {
+		printk(KERN_INFO "BO: %d: contig do readpage %p %lu %p\n", current->pid, pages[index], pages[index]->index, pages[index]->mapping);
 		btrfs_do_readpage(pages[index], em_cached, bio_ctrl,
-				  prev_em_start);
+				  prev_em_start, &inode->vfs_inode);
 		put_page(pages[index]);
 	}
 }
@@ -2256,7 +2258,7 @@ void extent_readahead(struct readahead_control *rac)
 		u64 contig_end = contig_start + readahead_batch_length(rac) - 1;
 
 		contiguous_readpages(pagepool, nr, contig_start, contig_end,
-				&em_cached, &bio_ctrl, &prev_em_start);
+				&em_cached, &bio_ctrl, &prev_em_start, BTRFS_I(rac->mapping->host));
 	}
 
 	if (em_cached)

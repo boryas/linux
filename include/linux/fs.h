@@ -441,6 +441,9 @@ struct address_space_operations {
 				sector_t *span);
 	void (*swap_deactivate)(struct file *file);
 	int (*swap_rw)(struct kiocb *iocb, struct iov_iter *iter);
+	struct address_space *(*shared_mapping)(struct address_space *mapping);
+	pgoff_t (*shared_index)(struct address_space *mapping,
+				pgoff_t index);
 };
 
 extern const struct address_space_operations empty_aops;

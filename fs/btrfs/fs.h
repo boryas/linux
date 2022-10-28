@@ -827,6 +827,8 @@ struct btrfs_fs_info {
 	spinlock_t eb_leak_lock;
 	struct list_head allocated_ebs;
 #endif
+
+	struct inode *extent_cache_inode;
 };
 
 static inline u64 btrfs_get_fs_generation(const struct btrfs_fs_info *fs_info)
