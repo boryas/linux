@@ -3,6 +3,8 @@
 #ifndef BTRFS_SPACE_INFO_H
 #define BTRFS_SPACE_INFO_H
 
+#include "linux/mutex.h"
+#include "linux/rwsem.h"
 #include "volumes.h"
 
 /*
@@ -82,6 +84,14 @@ enum btrfs_flush_state {
 	COMMIT_TRANS		= 11,
 };
 
+struct btrfs_block_group_working_set {
+	struct rw_semaphore ws_sem;
+	struct mutex lru_lock;
+	size_t size;
+	struct list_head ws;
+	struct list_head lru;
+};
+
 struct btrfs_space_info {
 	spinlock_t lock;
 
@@ -158,6 +168,8 @@ struct btrfs_space_info {
 	struct kobject *block_group_kobjs[BTRFS_NR_RAID_TYPES];
 
 	atomic64_t alloc_gen;
+	u64 last_reclaim_alloc_gen;
+	struct btrfs_block_group_working_set bg_ws;
 };
 
 struct reserve_ticket {
@@ -239,5 +251,14 @@ int btrfs_reserve_data_bytes(struct btrfs_fs_info *fs_info, u64 bytes,
 void btrfs_dump_space_info_for_trans_abort(struct btrfs_fs_info *fs_info);
 void btrfs_init_async_reclaim_work(struct btrfs_fs_info *fs_info);
 u64 btrfs_account_ro_block_groups_free_space(struct btrfs_space_info *sinfo);
+
+int btrfs_min_block_groups(struct btrfs_fs_info *fs_info,
+			   struct btrfs_space_info *space_info);
+
+void btrfs_bg_ws_init(struct btrfs_block_group_working_set *bg_ws);
+void bg_ws_push_lru(struct btrfs_block_group_working_set *bg_ws,
+		    struct btrfs_block_group *bg);
+int btrfs_ensure_block_group_working_set(struct btrfs_fs_info *fs_info);
+void btrfs_reclaim_block_group_working_set(struct btrfs_fs_info *fs_info);
 
 #endif /* BTRFS_SPACE_INFO_H */
