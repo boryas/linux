@@ -4226,6 +4226,7 @@ again:
 	} else if (ret == -EAGAIN) {
 		goto again;
 	} else if (ret > 0) {
+		atomic_inc(&bg->recent_alloc_fails);
 		return ret;
 	}
 
@@ -4259,6 +4260,7 @@ again:
 
 	alloc_gen = atomic64_inc_return(&bg->space_info->alloc_gen);
 	atomic64_set(&bg->alloc_gen, alloc_gen);
+	atomic_set(&bg->recent_alloc_fails, 0);
 	btrfs_inc_block_group_reservations(bg);
 	trace_btrfs_reserve_extent(bg, ffe_ctl);
 
@@ -4299,6 +4301,8 @@ static noinline int find_free_extent(struct btrfs_root *root,
 	struct btrfs_block_group *block_group = NULL;
 	struct btrfs_space_info *space_info;
 	bool full_search = false;
+	u8 only;
+	int i;
 
 	WARN_ON(ffe_ctl->num_bytes < fs_info->sectorsize);
 
@@ -4378,6 +4382,33 @@ static noinline int find_free_extent(struct btrfs_root *root,
 			btrfs_put_block_group(block_group);
 		}
 	}
+
+	ffe_ctl->working_set = true;
+	down_read(&space_info->bg_ws.ws_sem);
+	only = get_random_u8() % (space_info->bg_ws.size ? : 1);
+	i = 0;
+working_set:
+	list_for_each_entry(block_group, &space_info->bg_ws.ws, working_set) {
+		if (only && i < only) {
+			i++;
+			continue;
+		} else if (only && i > only) {
+			only = 0;
+			goto working_set;
+		}
+		ret = ffe_grab_block_group(ffe_ctl, block_group);
+		if (ret)
+			continue;
+		ret = ffe_try_block_group(root, ffe_ctl, &block_group);
+		if (!ret) {
+			up_read(&space_info->bg_ws.ws_sem);
+			btrfs_release_block_group(block_group, ffe_ctl->delalloc);
+			found_extent(ffe_ctl, ins);
+			goto out;
+		}
+		btrfs_release_block_group(block_group, ffe_ctl->delalloc);
+	}
+	up_read(&space_info->bg_ws.ws_sem);
 search:
 	trace_find_free_extent_search_loop(root, ffe_ctl);
 	ffe_ctl->have_caching_bg = false;
@@ -4395,7 +4426,8 @@ have_block_group:
 		trace_find_free_extent_have_block_group(root, ffe_ctl, block_group);
 		ret = ffe_try_block_group(root, ffe_ctl, &block_group);
 		if (!ret) {
-			btrfs_get_block_group(block_group);
+			if (!ffe_ctl->hinted)
+				bg_ws_push_lru(&block_group->space_info->bg_ws, block_group);
 			up_read(&space_info->groups_sem);
 			btrfs_release_block_group(block_group, ffe_ctl->delalloc);
 			found_extent(ffe_ctl, ins);

@@ -85,6 +85,8 @@ struct find_free_extent_ctl {
 
 	/* First caching error we see */
 	int cache_block_group_error;
+
+	bool working_set;
 };
 
 enum btrfs_inline_ref_type {

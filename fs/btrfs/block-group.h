@@ -246,6 +246,9 @@ struct btrfs_block_group {
 	struct extent_buffer *last_eb;
 	enum btrfs_block_group_size_class size_class;
 	atomic64_t alloc_gen;
+	struct list_head working_set;
+	struct list_head working_set_lru;
+	atomic_t recent_alloc_fails;
 };
 
 static inline u64 btrfs_block_group_end(struct btrfs_block_group *block_group)
@@ -365,5 +368,12 @@ int btrfs_use_block_group_size_class(struct btrfs_block_group *bg,
 				     enum btrfs_block_group_size_class size_class,
 				     bool force_wrong_size_class);
 bool btrfs_block_group_should_use_size_class(struct btrfs_block_group *bg);
+
+#define btrfs_bg_info(fs_info, bg, fmt, args...)			\
+do {									\
+	char buf[128] = {'\0'};						\
+	btrfs_describe_block_groups(bg->flags, buf, sizeof(buf));	\
+	btrfs_info(fs_info, "BTRFS BG %llu %s " fmt, bg->start, buf, ##args);		\
+} while (0)
 
 #endif /* BTRFS_BLOCK_GROUP_H */

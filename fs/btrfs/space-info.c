@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include "linux/kern_levels.h"
+#include "linux/list.h"
 #include "misc.h"
 #include "ctree.h"
 #include "space-info.h"
@@ -256,6 +258,8 @@ static int create_space_info(struct btrfs_fs_info *info, u64 flags)
 	if (flags & BTRFS_BLOCK_GROUP_DATA)
 		info->data_sinfo = space_info;
 
+	btrfs_bg_ws_init(&space_info->bg_ws);
+
 	return ret;
 }
 
@@ -326,6 +330,8 @@ void btrfs_add_bg_to_space_info(struct btrfs_fs_info *info,
 	down_write(&found->groups_sem);
 	list_add_tail(&block_group->list, &found->block_groups[index]);
 	up_write(&found->groups_sem);
+
+	bg_ws_push_lru(&found->bg_ws, block_group);
 }
 
 struct btrfs_space_info *btrfs_find_space_info(struct btrfs_fs_info *info,
@@ -1849,4 +1855,217 @@ u64 btrfs_account_ro_block_groups_free_space(struct btrfs_space_info *sinfo)
 	spin_unlock(&sinfo->lock);
 
 	return free_bytes;
+}
+
+// TODO: match chunk alloc algorithm more closely
+// TODO: intelligent config/calc instead of "max(5, dev_para)"
+// i.e., do you really want nr_devs bgs for metadata?!
+int btrfs_min_block_groups(struct btrfs_fs_info *fs_info,
+			   struct btrfs_space_info *space_info)
+{
+	int bg_min_devs = btrfs_nr_min_devs(space_info->flags);
+	int num_devs = fs_info->fs_devices->rw_devices;
+
+	if (space_info->flags & BTRFS_BLOCK_GROUP_SYSTEM)
+		return 1;
+
+	bg_min_devs = bg_min_devs ? : 1;
+	return max(5, num_devs / bg_min_devs);
+}
+
+void btrfs_bg_ws_init(struct btrfs_block_group_working_set *bg_ws)
+{
+	init_rwsem(&bg_ws->ws_sem);
+	mutex_init(&bg_ws->lru_lock);
+	INIT_LIST_HEAD(&bg_ws->ws);
+	INIT_LIST_HEAD(&bg_ws->lru);
+}
+
+void bg_ws_push_lru(struct btrfs_block_group_working_set *bg_ws,
+		    struct btrfs_block_group *bg)
+{
+	mutex_lock(&bg_ws->lru_lock);
+	// TODO: BO: spin lock bg?
+	if (!list_empty(&bg->working_set))
+		goto out;
+	if (!list_empty(&bg->working_set_lru))
+		list_del_init(&bg->working_set_lru);
+	else
+		btrfs_get_block_group(bg);
+	list_add(&bg->working_set_lru, &bg_ws->lru);
+	//btrfs_bg_info(bg->fs_info, bg, "push to ws lru");
+out:
+	mutex_unlock(&bg_ws->lru_lock);
+}
+
+static struct btrfs_block_group *bg_ws_pop_lru(struct btrfs_block_group_working_set *bg_ws)
+{
+	struct btrfs_block_group *bg = NULL;
+
+	mutex_lock(&bg_ws->lru_lock);
+	if (list_empty(&bg_ws->lru))
+		goto unlock;
+	bg = list_first_entry(&bg_ws->lru, struct btrfs_block_group, working_set_lru);
+	// TODO: BO: spin lock bg?
+	//btrfs_bg_info(bg->fs_info, bg, "pop from ws lru");
+	list_del_init(&bg->working_set_lru);
+	btrfs_put_block_group(bg);
+unlock:
+	mutex_unlock(&bg_ws->lru_lock);
+	return bg;
+}
+
+static int bg_ws_grow(struct btrfs_fs_info *fs_info,
+		      struct btrfs_block_group_working_set *bg_ws,
+		      struct btrfs_space_info *space_info, size_t new_size)
+{
+	int ret;
+	int i;
+	size_t needs;
+	struct btrfs_block_group *bg;
+	struct btrfs_root *root;
+	struct btrfs_trans_handle *trans;
+
+	needs = new_size - bg_ws->size;
+again:
+	while (needs) {
+		bg = bg_ws_pop_lru(bg_ws);
+		if (!bg)
+			break;
+		down_write(&bg_ws->ws_sem);
+		// TODO: BO: spin lock bg?
+		btrfs_get_block_group(bg);
+		list_add_tail(&bg->working_set, &bg_ws->ws);
+		up_write(&bg_ws->ws_sem);
+		needs--;
+		//btrfs_bg_info(bg->fs_info, bg, "grow; add to working set");
+	}
+	for (i = 0; i < needs; i++) {
+		root = btrfs_block_group_root(fs_info);
+		trans = btrfs_start_transaction(root, 0);
+		ret = btrfs_force_chunk_alloc(trans, space_info->flags);
+		btrfs_end_transaction(trans);
+		if (ret)
+			goto done;
+	}
+	if (needs > 0)
+		goto again;
+done:
+	return ret;
+}
+
+static int bg_ws_shrink(struct btrfs_block_group_working_set *bg_ws,
+			size_t new_size)
+{
+	struct btrfs_block_group *bg;
+	size_t shrink = bg_ws->size - new_size;
+
+	while (shrink > 0) {
+		down_write(&bg_ws->ws_sem);
+		if (list_empty(&bg_ws->ws)) {
+			printk(KERN_WARNING "expected a bg in the working set but got none.");
+			up_write(&bg_ws->ws_sem);
+			break;
+		}
+		bg = list_last_entry(&bg_ws->ws, struct btrfs_block_group, working_set);
+		//btrfs_bg_info(bg->fs_info, bg, "shrink; remove from working set");
+		// TODO: BO: spin lock bg?
+		btrfs_put_block_group(bg);
+		list_del_init(&bg->working_set);
+		up_write(&bg_ws->ws_sem);
+		shrink--;
+	}
+	return shrink;
+}
+
+static int bg_ws_resize(struct btrfs_fs_info *fs_info,
+			struct btrfs_block_group_working_set *bg_ws,
+			struct btrfs_space_info *space_info, size_t new_size)
+{
+	int ret;
+
+	if (new_size > bg_ws->size)
+		ret = bg_ws_grow(fs_info, bg_ws, space_info, new_size);
+	else
+		ret = bg_ws_shrink(bg_ws, new_size);
+	if (!ret)
+		bg_ws->size = new_size;
+	return ret;
+}
+
+static int space_info_ensure_bg_ws(struct btrfs_fs_info *fs_info,
+				   struct btrfs_space_info *space_info)
+{
+	size_t new_size = btrfs_min_block_groups(fs_info, space_info);
+	struct btrfs_block_group_working_set *bg_ws = &space_info->bg_ws;
+
+	return bg_ws_resize(fs_info, bg_ws, space_info, new_size);
+}
+
+int btrfs_ensure_block_group_working_set(struct btrfs_fs_info *fs_info)
+{
+	int ret;
+	struct btrfs_space_info *space_info;
+
+	list_for_each_entry(space_info, &fs_info->space_info, list) {
+		ret = space_info_ensure_bg_ws(fs_info, space_info);
+		if (ret)
+			break;
+	}
+	return ret;
+}
+
+static int bg_ws_replace_bg(struct btrfs_block_group_working_set *bg_ws,
+			    struct btrfs_block_group *old_bg)
+{
+	struct btrfs_block_group *new_bg;
+
+	lockdep_assert_held_write(&bg_ws->ws_sem);
+
+	new_bg = bg_ws_pop_lru(bg_ws);
+	if (!new_bg)
+		return ENOENT;
+
+	ASSERT(!list_empty(&old_bg->working_set));
+	ASSERT(list_empty(&new_bg->working_set));
+	// TODO: BO: spin lock bgs?
+	//btrfs_bg_info(old_bg->fs_info, old_bg, "replace; remove from working set");
+	//btrfs_bg_info(new_bg->fs_info, new_bg, "replace; add to working set");
+	list_del_init(&old_bg->working_set);
+	btrfs_put_block_group(old_bg);
+	btrfs_get_block_group(new_bg);
+	list_add_tail(&new_bg->working_set, &bg_ws->ws);
+
+
+	return 0;
+}
+
+static int space_info_reclaim_bg_ws(struct btrfs_fs_info *fs_info,
+				    struct btrfs_space_info *space_info)
+{
+	struct btrfs_block_group *bg;
+	struct btrfs_block_group *tmp;
+	struct btrfs_block_group_working_set *bg_ws = &space_info->bg_ws;
+	int ret;
+
+	down_write(&bg_ws->ws_sem);
+	list_for_each_entry_safe(bg, tmp, &bg_ws->ws, working_set) {
+		if (atomic_read(&bg->recent_alloc_fails) >= 10 &&
+		    atomic64_read(&bg->alloc_gen) < space_info->last_reclaim_alloc_gen) {
+			ret = bg_ws_replace_bg(bg_ws, bg);
+			if (ret)
+				break;
+		}
+	}
+	space_info->last_reclaim_alloc_gen = atomic64_read(&space_info->alloc_gen);
+	up_write(&bg_ws->ws_sem);
+	return ret;
+}
+
+void btrfs_reclaim_block_group_working_set(struct btrfs_fs_info *fs_info)
+{
+	struct btrfs_space_info *space_info;
+
+	list_for_each_entry(space_info, &fs_info->space_info, list)
+		space_info_reclaim_bg_ws(fs_info, space_info);
 }

@@ -1756,6 +1756,7 @@ static int cleaner_kthread(void *arg)
 		 * all unused block_groups. This possibly gives us some more free
 		 * space.
 		 */
+		btrfs_reclaim_block_group_working_set(fs_info);
 		btrfs_reclaim_bgs(fs_info);
 sleep:
 		clear_and_wake_up_bit(BTRFS_FS_CLEANER_RUNNING, &fs_info->flags);
@@ -3204,6 +3205,7 @@ int btrfs_start_pre_rw_mount(struct btrfs_fs_info *fs_info)
 		}
 	}
 
+	btrfs_ensure_block_group_working_set(fs_info);
 out:
 	return ret;
 }
