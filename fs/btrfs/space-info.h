@@ -156,6 +156,8 @@ struct btrfs_space_info {
 
 	struct kobject kobj;
 	struct kobject *block_group_kobjs[BTRFS_NR_RAID_TYPES];
+
+	atomic64_t alloc_gen;
 };
 
 struct reserve_ticket {

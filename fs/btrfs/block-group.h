@@ -233,6 +233,7 @@ struct btrfs_block_group {
 	struct list_head active_bg_list;
 	struct work_struct zone_finish_work;
 	struct extent_buffer *last_eb;
+	atomic64_t alloc_gen;
 };
 
 static inline u64 btrfs_block_group_end(struct btrfs_block_group *block_group)
