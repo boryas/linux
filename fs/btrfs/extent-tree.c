@@ -4187,6 +4187,7 @@ static int ffe_try_block_group(struct btrfs_root *root,
 	struct btrfs_block_group *bg = *block_group;
 	struct btrfs_fs_info *fs_info = bg->fs_info;
 	int ret;
+	u64 alloc_gen;
 
 again:
 	ffe_ctl->cached = btrfs_block_group_done(bg);
@@ -4255,6 +4256,9 @@ again:
 				ffe_ctl->num_bytes);
 		return 1;
 	}
+
+	alloc_gen = atomic64_inc_return(&bg->space_info->alloc_gen);
+	atomic64_set(&bg->alloc_gen, alloc_gen);
 	btrfs_inc_block_group_reservations(bg);
 	trace_btrfs_reserve_extent(bg, ffe_ctl);
 
