@@ -1028,16 +1028,13 @@ struct extent_buffer *read_tree_block(struct btrfs_fs_info *fs_info, u64 bytenr,
 void btrfs_clean_tree_block(struct extent_buffer *buf)
 {
 	struct btrfs_fs_info *fs_info = buf->fs_info;
-	if (btrfs_header_generation(buf) ==
-	    fs_info->running_transaction->transid) {
-		btrfs_assert_tree_write_locked(buf);
+	btrfs_assert_tree_write_locked(buf);
 
-		if (test_and_clear_bit(EXTENT_BUFFER_DIRTY, &buf->bflags)) {
-			percpu_counter_add_batch(&fs_info->dirty_metadata_bytes,
-						 -buf->len,
-						 fs_info->dirty_metadata_batch);
-			clear_extent_buffer_dirty(buf);
-		}
+	if (test_and_clear_bit(EXTENT_BUFFER_DIRTY, &buf->bflags)) {
+		percpu_counter_add_batch(&fs_info->dirty_metadata_bytes,
+					 -buf->len,
+					 fs_info->dirty_metadata_batch);
+		clear_extent_buffer_dirty(buf);
 	}
 }
 
