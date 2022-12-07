@@ -5144,11 +5144,12 @@ static int btrfs_destroy_marked_extents(struct btrfs_fs_info *fs_info,
 			start += fs_info->nodesize;
 			if (!eb)
 				continue;
-			wait_on_extent_buffer_writeback(eb);
 
-			if (test_and_clear_bit(EXTENT_BUFFER_DIRTY,
-					       &eb->bflags))
-				clear_extent_buffer_dirty(eb);
+			btrfs_tree_lock(eb);
+			wait_on_extent_buffer_writeback(eb);
+			btrfs_clean_tree_block(eb);
+			btrfs_tree_unlock(eb);
+
 			free_extent_buffer_stale(eb);
 		}
 	}
