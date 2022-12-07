@@ -1025,7 +1025,7 @@ struct extent_buffer *read_tree_block(struct btrfs_fs_info *fs_info, u64 bytenr,
 
 }
 
-void btrfs_clean_tree_block(struct extent_buffer *buf)
+void btrfs_clear_buffer_dirty(struct extent_buffer *buf)
 {
 	struct btrfs_fs_info *fs_info = buf->fs_info;
 	btrfs_assert_tree_write_locked(buf);
@@ -5147,7 +5147,7 @@ static int btrfs_destroy_marked_extents(struct btrfs_fs_info *fs_info,
 
 			btrfs_tree_lock(eb);
 			wait_on_extent_buffer_writeback(eb);
-			btrfs_clean_tree_block(eb);
+			btrfs_clear_buffer_dirty(eb);
 			btrfs_tree_unlock(eb);
 
 			free_extent_buffer_stale(eb);
