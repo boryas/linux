@@ -1367,6 +1367,8 @@ int btrfs_load_block_group_zone_info(struct btrfs_block_group *cache, bool new)
 		 */
 		if (!device->zone_info->max_active_zones)
 			__set_bit(i, active);
+		else
+			cache->has_zns_device = true;
 
 		if (!is_sequential) {
 			alloc_offsets[i] = WP_CONVENTIONAL;
