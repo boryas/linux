@@ -75,9 +75,24 @@ static struct list_head *get_discard_list(struct btrfs_discard_ctl *discard_ctl,
 	return &discard_ctl->discard_list[block_group->discard_index];
 }
 
+static void __get_discard(struct btrfs_block_group *block_group)
+{
+	WARN_ON(refcount_read(&block_group->async_discard_refs) != 1);
+	refcount_inc(&block_group->async_discard_refs);
+	btrfs_get_block_group(block_group);
+}
+
+static void __put_discard(struct btrfs_block_group *block_group)
+{
+	WARN_ON(refcount_read(&block_group->async_discard_refs) != 2);
+	refcount_dec(&block_group->async_discard_refs);
+	btrfs_put_block_group(block_group);
+}
+
 static void __add_to_discard_list(struct btrfs_discard_ctl *discard_ctl,
 				  struct btrfs_block_group *block_group)
 {
+	lockdep_assert_held(&discard_ctl->lock);
 	if (!btrfs_run_discard_work(discard_ctl))
 		return;
 
@@ -90,7 +105,7 @@ static void __add_to_discard_list(struct btrfs_discard_ctl *discard_ctl,
 		block_group->discard_state = BTRFS_DISCARD_RESET_CURSOR;
 	}
 	if (list_empty(&block_group->discard_list))
-		btrfs_get_block_group(block_group);
+		__get_discard(block_group);
 
 	list_move_tail(&block_group->discard_list,
 		       get_discard_list(discard_ctl, block_group));
@@ -128,7 +143,7 @@ static void add_to_discard_unused_list(struct btrfs_discard_ctl *discard_ctl,
 					      BTRFS_DISCARD_UNUSED_DELAY);
 	block_group->discard_state = BTRFS_DISCARD_RESET_CURSOR;
 	if (!queued)
-		btrfs_get_block_group(block_group);
+		__get_discard(block_group);
 	list_add_tail(&block_group->discard_list,
 		      &discard_ctl->discard_list[BTRFS_DISCARD_INDEX_UNUSED]);
 
@@ -152,7 +167,7 @@ static bool remove_from_discard_list(struct btrfs_discard_ctl *discard_ctl,
 	queued = !list_empty(&block_group->discard_list);
 	list_del_init(&block_group->discard_list);
 	if (queued && !running)
-		btrfs_put_block_group(block_group);
+		__put_discard(block_group);
 
 	spin_unlock(&discard_ctl->lock);
 
@@ -230,7 +245,7 @@ again:
 				__add_to_discard_list(discard_ctl, block_group);
 			} else {
 				list_del_init(&block_group->discard_list);
-				btrfs_put_block_group(block_group);
+				__put_discard(block_group);
 			}
 			goto again;
 		}
@@ -525,8 +540,8 @@ static void btrfs_discard_workfn(struct work_struct *work)
 	spin_lock(&discard_ctl->lock);
 	discard_ctl->prev_discard = trimmed;
 	discard_ctl->prev_discard_time = now;
-	if (list_empty(&block_group->discard_list))
-		btrfs_put_block_group(block_group);
+	if (discard_ctl->block_group == NULL)
+		__put_discard(block_group);
 	discard_ctl->block_group = NULL;
 	__btrfs_discard_schedule_work(discard_ctl, now, false);
 	spin_unlock(&discard_ctl->lock);
@@ -703,7 +718,7 @@ static void btrfs_discard_purge_list(struct btrfs_discard_ctl *discard_ctl)
 			if (block_group->used == 0)
 				btrfs_mark_bg_unused(block_group);
 			spin_lock(&discard_ctl->lock);
-			btrfs_put_block_group(block_group);
+			__put_discard(block_group);
 		}
 	}
 	spin_unlock(&discard_ctl->lock);

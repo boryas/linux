@@ -1246,6 +1246,7 @@ int btrfs_remove_block_group(struct btrfs_trans_handle *trans,
 	}
 
 out:
+	WARN_ON(refcount_read(&block_group->async_discard_refs) != 1);
 	/* Once for the lookup reference */
 	btrfs_put_block_group(block_group);
 	if (remove_rsv)
@@ -2113,6 +2114,7 @@ static struct btrfs_block_group *btrfs_create_block_group_cache(
 	cache->discard_index = BTRFS_DISCARD_INDEX_UNUSED;
 
 	refcount_set(&cache->refs, 1);
+	refcount_set(&cache->async_discard_refs, 1);
 	spin_lock_init(&cache->lock);
 	init_rwsem(&cache->data_rwsem);
 	INIT_LIST_HEAD(&cache->list);
@@ -4257,6 +4259,7 @@ int btrfs_free_block_groups(struct btrfs_fs_info *info)
 		ASSERT(list_empty(&block_group->io_list));
 		ASSERT(list_empty(&block_group->bg_list));
 		ASSERT(refcount_read(&block_group->refs) == 1);
+		WARN_ON(refcount_read(&block_group->async_discard_refs) != 1);
 		ASSERT(block_group->swap_extents == 0);
 		btrfs_put_block_group(block_group);
 
