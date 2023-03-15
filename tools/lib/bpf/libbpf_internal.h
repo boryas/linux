@@ -21,7 +21,7 @@
 #pragma GCC poison u8 u16 u32 u64 s8 s16 s32 s64
 
 /* prevent accidental re-addition of reallocarray()/strlcpy() */
-#pragma GCC poison reallocarray strlcpy
+#pragma GCC poison reallocarray
 
 #include "libbpf.h"
 #include "btf.h"
