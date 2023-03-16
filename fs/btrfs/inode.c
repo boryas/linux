@@ -7764,6 +7764,7 @@ static void btrfs_dio_submit_io(const struct iomap_iter *iter, struct bio *bio,
 	struct btrfs_dio_private *dip =
 		container_of(bbio, struct btrfs_dio_private, bbio);
 	struct btrfs_dio_data *dio_data = iter->private;
+	int err = 0;
 
 	btrfs_bio_init(bbio, BTRFS_I(iter->inode), btrfs_dio_end_io, bio->bi_private);
 	bbio->file_offset = file_offset;
@@ -7772,7 +7773,24 @@ static void btrfs_dio_submit_io(const struct iomap_iter *iter, struct bio *bio,
 	dip->bytes = bio->bi_iter.bi_size;
 
 	dio_data->submitted += bio->bi_iter.bi_size;
-	btrfs_submit_bio(bbio, 0);
+	/*
+	 * Check if we are doing a partial write. If we are, we need to split
+	 * the ordered extent to match the submitted bio. The remaining ordered
+	 * extent past the end of the write will be finished without a write by
+	 * iomap_end. This is to avoid a deadlock when the write buffer is a
+	 * mapping of the file we are writing, and we can't fault in its pages
+	 * because of an outstanding ordered extent waiting for that fault to
+	 * happen.
+	 */
+	if (iter->flags & IOMAP_WRITE) {
+		ASSERT(dio_data->ordered);
+		if (bio->bi_iter.bi_size < dio_data->ordered->num_bytes)
+			err = btrfs_extract_ordered_extent(bbio);
+	}
+	if (err)
+		btrfs_bio_end_io(bbio, err);
+	else
+		btrfs_submit_bio(bbio, 0);
 }
 
 static const struct iomap_ops btrfs_dio_iomap_ops = {
