@@ -2551,6 +2551,8 @@ static int split_zoned_em(struct btrfs_inode *inode, u64 start, u64 len,
 		goto out_unlock;
 	}
 
+	printk(KERN_INFO "split_zoned_em start %llu len %llu pre %llu post %llu em->len %llu\n", start, len, pre, post, em->len);
+
 	ASSERT(em->len == len);
 	ASSERT(!test_bit(EXTENT_FLAG_COMPRESSED, &em->flags));
 	ASSERT(em->block_start < EXTENT_MAP_LAST_BYTE);
@@ -2626,6 +2628,67 @@ out:
 	return ret;
 }
 
+static int ordered_extent_extract_check(struct btrfs_ordered_extent *ordered,
+					struct btrfs_bio *bbio)
+{
+	u64 start = (u64)bbio->bio.bi_iter.bi_sector << SECTOR_SHIFT;
+	u64 len = bbio->bio.bi_iter.bi_size;
+	u64 end = start + len;
+	u64 ordered_end = ordered->disk_bytenr + ordered->disk_num_bytes;
+	int ret = 0;
+
+	/* We cannot split once end_bio'd ordered extent */
+	if (WARN_ON_ONCE(ordered->bytes_left != ordered->disk_num_bytes)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* We cannot split a compressed ordered extent */
+	if (WARN_ON_ONCE(ordered->disk_num_bytes != ordered->num_bytes)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* bio must be in one ordered extent */
+	if (WARN_ON_ONCE(start < ordered->disk_bytenr || end > ordered_end)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* Checksum list should be empty */
+	if (WARN_ON_ONCE(!list_empty(&ordered->list))) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+out:
+	return ret;
+}
+
+
+static blk_status_t extract_partial_ordered_extent(struct btrfs_ordered_extent *ordered,
+						   struct btrfs_bio *bbio)
+{
+	u64 start = (u64)bbio->bio.bi_iter.bi_sector << SECTOR_SHIFT;
+	u64 len = bbio->bio.bi_iter.bi_size;
+	u64 pre = 0;
+	u64 post = ordered->num_bytes - len;
+	int ret = 0;
+
+	ASSERT(len < ordered->num_bytes);
+	//ASSERT(start == ordered->disk_bytenr);
+	printk(KERN_INFO "BO: extract partial oe! start %llu len %llu pre %llu post %llu oe {%llu %llu; %llu %llu}\n", start, len, pre, post, ordered->file_offset, ordered->num_bytes, ordered->disk_bytenr, ordered->disk_num_bytes);
+
+	ret = ordered_extent_extract_check(ordered, bbio);
+	if (ret)
+		goto out;
+	ret = btrfs_split_ordered_extent(ordered, pre, post);
+	if (ret)
+		goto out;
+out:
+	return errno_to_blk_status(ret);
+}
+
 blk_status_t btrfs_extract_ordered_extent(struct btrfs_bio *bbio)
 {
 	u64 start = (u64)bbio->bio.bi_iter.bi_sector << SECTOR_SHIFT;
@@ -2646,31 +2709,11 @@ blk_status_t btrfs_extract_ordered_extent(struct btrfs_bio *bbio)
 	if (ordered->disk_num_bytes == len)
 		goto out;
 
-	/* We cannot split once end_bio'd ordered extent */
-	if (WARN_ON_ONCE(ordered->bytes_left != ordered->disk_num_bytes)) {
-		ret = -EINVAL;
+	ret = ordered_extent_extract_check(ordered, bbio);
+	if (ret)
 		goto out;
-	}
-
-	/* We cannot split a compressed ordered extent */
-	if (WARN_ON_ONCE(ordered->disk_num_bytes != ordered->num_bytes)) {
-		ret = -EINVAL;
-		goto out;
-	}
 
 	ordered_end = ordered->disk_bytenr + ordered->disk_num_bytes;
-	/* bio must be in one ordered extent */
-	if (WARN_ON_ONCE(start < ordered->disk_bytenr || end > ordered_end)) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	/* Checksum list should be empty */
-	if (WARN_ON_ONCE(!list_empty(&ordered->list))) {
-		ret = -EINVAL;
-		goto out;
-	}
-
 	file_len = ordered->num_bytes;
 	pre = start - ordered->disk_bytenr;
 	post = ordered_end - end;
@@ -7783,9 +7826,10 @@ static void btrfs_dio_submit_io(const struct iomap_iter *iter, struct bio *bio,
 	 * happen.
 	 */
 	if (iter->flags & IOMAP_WRITE) {
-		ASSERT(dio_data->ordered);
-		if (bio->bi_iter.bi_size < dio_data->ordered->num_bytes)
-			err = btrfs_extract_ordered_extent(bbio);
+		struct btrfs_ordered_extent *ordered = dio_data->ordered;
+		ASSERT(ordered);
+		if (bio->bi_iter.bi_size < ordered->num_bytes)
+			err = extract_partial_ordered_extent(ordered, bbio);
 	}
 	if (err)
 		btrfs_bio_end_io(bbio, err);
