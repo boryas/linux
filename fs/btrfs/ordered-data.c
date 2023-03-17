@@ -1117,8 +1117,8 @@ bool btrfs_try_lock_ordered_range(struct btrfs_inode *inode, u64 start, u64 end,
 }
 
 
-static int clone_ordered_extent(struct btrfs_ordered_extent *ordered, s64 pos,
-				u64 len)
+static struct btrfs_ordered_extent *clone_ordered_extent(struct btrfs_ordered_extent *ordered,
+						  s64 pos, u64 len)
 {
 	struct inode *inode = ordered->inode;
 	struct btrfs_fs_info *fs_info = BTRFS_I(inode)->root->fs_info;
@@ -1133,18 +1133,22 @@ static int clone_ordered_extent(struct btrfs_ordered_extent *ordered, s64 pos,
 	percpu_counter_add_batch(&fs_info->ordered_bytes, -len,
 				 fs_info->delalloc_batch);
 	WARN_ON_ONCE(flags & (1 << BTRFS_ORDERED_COMPRESSED));
-	return btrfs_add_ordered_extent(BTRFS_I(inode), file_offset, len, len,
-					disk_bytenr, len, 0, flags,
-					ordered->compress_type);
+	return btrfs_alloc_ordered_extent(BTRFS_I(inode), file_offset, len, len,
+					  disk_bytenr, len, 0, flags,
+					  ordered->compress_type);
 }
 
-int btrfs_split_ordered_extent(struct btrfs_ordered_extent *ordered, u64 pre,
-				u64 post)
+int btrfs_split_ordered_extent(struct btrfs_ordered_extent *ordered,
+			       u64 pre, u64 post,
+			       struct btrfs_ordered_extent **ret_pre,
+			       struct btrfs_ordered_extent **ret_post)
+
 {
 	struct inode *inode = ordered->inode;
 	struct btrfs_ordered_inode_tree *tree = &BTRFS_I(inode)->ordered_tree;
 	struct rb_node *node;
 	struct btrfs_fs_info *fs_info = btrfs_sb(inode->i_sb);
+	struct btrfs_ordered_extent *oe;
 	int ret = 0;
 
 	trace_btrfs_ordered_extent_split(BTRFS_I(inode), ordered);
@@ -1172,12 +1176,18 @@ int btrfs_split_ordered_extent(struct btrfs_ordered_extent *ordered, u64 pre,
 
 	spin_unlock_irq(&tree->lock);
 
-	if (pre)
-		ret = clone_ordered_extent(ordered, -pre, pre);
-	if (ret == 0 && post)
-		ret = clone_ordered_extent(ordered, pre + ordered->disk_num_bytes,
-					   post);
-
+	if (pre) {
+		oe = clone_ordered_extent(ordered, -pre, pre);
+		ret = IS_ERR(oe) ? PTR_ERR(oe) : 0;
+		if (!ret && ret_pre)
+			*ret_pre = oe;
+	}
+	if (!ret && post) {
+		oe = clone_ordered_extent(ordered, pre + ordered->disk_num_bytes, post);
+		ret = IS_ERR(oe) ? PTR_ERR(oe) : 0;
+		if (!ret && ret_post)
+			*ret_post = oe;
+	}
 	return ret;
 }
 

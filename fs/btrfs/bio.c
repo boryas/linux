@@ -653,7 +653,7 @@ static bool btrfs_submit_chunk(struct btrfs_bio *bbio, int mirror_num)
 		if (use_append) {
 			bio->bi_opf &= ~REQ_OP_WRITE;
 			bio->bi_opf |= REQ_OP_ZONE_APPEND;
-			ret = btrfs_extract_ordered_extent(bbio);
+			ret = btrfs_extract_ordered_extent_bio(bbio, NULL, NULL, NULL);
 			if (ret)
 				goto fail_put_bio;
 		}

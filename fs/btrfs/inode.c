@@ -2667,45 +2667,32 @@ out:
 	return ret;
 }
 
-
-static blk_status_t extract_partial_ordered_extent(struct btrfs_ordered_extent *ordered,
-						   struct btrfs_bio *bbio)
-{
-	struct btrfs_inode *inode = bbio->inode;
-	u64 start = (u64)bbio->bio.bi_iter.bi_sector << SECTOR_SHIFT;
-	u64 len = bbio->bio.bi_iter.bi_size;
-	u64 pre = len;
-	u64 post = 0;
-	int ret = 0;
-
-	ASSERT(len < ordered->num_bytes);
-	//ASSERT(start == ordered->disk_bytenr);
-	printk(KERN_INFO "BO: extract partial oe! start %llu len %llu pre %llu post %llu oe {%llu %llu; %llu %llu}\n", start, len, pre, post, ordered->file_offset, ordered->num_bytes, ordered->disk_bytenr, ordered->disk_num_bytes);
-
-	ret = ordered_extent_extract_check(ordered, bbio);
-	if (ret)
-		goto out;
-	ret = btrfs_split_ordered_extent(ordered, pre, post);
-	if (ret)
-		goto out;
-	ret = split_zoned_em(inode, bbio->file_offset, len, pre, post);
-out:
-	return errno_to_blk_status(ret);
-}
-
-blk_status_t btrfs_extract_ordered_extent(struct btrfs_bio *bbio)
+/*
+ * Extract a bio from an ordered extent to enforce an invariant where the bio
+ * fully matches a single ordered extent.
+ *
+ * @bbio: the bio to extract.
+ * @ordered: the ordered extent the bio is in, will be shrunk to fit. If NULL we
+ *	     will look it up.
+ * @ret_pre: out parameter to return the new oe in front of the bio, if needed.
+ * @ret_post: out parameter to return the new oe past the bio, if needed.
+ */
+blk_status_t btrfs_extract_ordered_extent_bio(struct btrfs_bio *bbio,
+					      struct btrfs_ordered_extent *ordered,
+					      struct btrfs_ordered_extent **ret_pre,
+					      struct btrfs_ordered_extent **ret_post)
 {
 	u64 start = (u64)bbio->bio.bi_iter.bi_sector << SECTOR_SHIFT;
 	u64 len = bbio->bio.bi_iter.bi_size;
 	struct btrfs_inode *inode = bbio->inode;
-	struct btrfs_ordered_extent *ordered;
 	u64 file_len;
 	u64 end = start + len;
 	u64 ordered_end;
 	u64 pre, post;
 	int ret = 0;
 
-	ordered = btrfs_lookup_ordered_extent(inode, bbio->file_offset);
+	if (!ordered)
+		ordered = btrfs_lookup_ordered_extent(inode, bbio->file_offset);
 	if (WARN_ON_ONCE(!ordered))
 		return BLK_STS_IOERR;
 
@@ -2722,7 +2709,7 @@ blk_status_t btrfs_extract_ordered_extent(struct btrfs_bio *bbio)
 	pre = start - ordered->disk_bytenr;
 	post = ordered_end - end;
 
-	ret = btrfs_split_ordered_extent(ordered, pre, post);
+	ret = btrfs_split_ordered_extent(ordered, pre, post, ret_pre, ret_post);
 	if (ret)
 		goto out;
 	ret = split_zoned_em(inode, bbio->file_offset, file_len, pre, post);
@@ -7822,18 +7809,16 @@ static void btrfs_dio_submit_io(const struct iomap_iter *iter, struct bio *bio,
 	dio_data->submitted += bio->bi_iter.bi_size;
 	/*
 	 * Check if we are doing a partial write. If we are, we need to split
-	 * the ordered extent to match the submitted bio. The remaining ordered
-	 * extent past the end of the write will be finished without a write by
-	 * iomap_end. This is to avoid a deadlock when the write buffer is a
-	 * mapping of the file we are writing, and we can't fault in its pages
-	 * because of an outstanding ordered extent waiting for that fault to
-	 * happen.
+	 * the ordered extent to match the submitted bio. Hang on to the
+	 * remaining unfinishable ordered_extent in dio_data so that it can be
+	 * cancelled in iomap_end to avoid a deadlock wherein faulting the
+	 * remaining pages is blocked on the outstanding ordered extent.
 	 */
 	if (iter->flags & IOMAP_WRITE) {
 		struct btrfs_ordered_extent *ordered = dio_data->ordered;
 		ASSERT(ordered);
 		if (bio->bi_iter.bi_size < ordered->num_bytes)
-			err = extract_partial_ordered_extent(ordered, bbio);
+			err = btrfs_extract_ordered_extent_bio(bbio, ordered, NULL, &dio_data->ordered);
 	}
 	if (err)
 		btrfs_bio_end_io(bbio, err);
