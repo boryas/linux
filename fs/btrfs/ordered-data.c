@@ -1117,7 +1117,7 @@ bool btrfs_try_lock_ordered_range(struct btrfs_inode *inode, u64 start, u64 end,
 }
 
 
-static int clone_ordered_extent(struct btrfs_ordered_extent *ordered, u64 pos,
+static int clone_ordered_extent(struct btrfs_ordered_extent *ordered, s64 pos,
 				u64 len)
 {
 	struct inode *inode = ordered->inode;
@@ -1173,7 +1173,7 @@ int btrfs_split_ordered_extent(struct btrfs_ordered_extent *ordered, u64 pre,
 	spin_unlock_irq(&tree->lock);
 
 	if (pre)
-		ret = clone_ordered_extent(ordered, 0, pre);
+		ret = clone_ordered_extent(ordered, -pre, pre);
 	if (ret == 0 && post)
 		ret = clone_ordered_extent(ordered, pre + ordered->disk_num_bytes,
 					   post);

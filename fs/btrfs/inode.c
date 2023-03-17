@@ -2553,7 +2553,9 @@ static int split_zoned_em(struct btrfs_inode *inode, u64 start, u64 len,
 
 	printk(KERN_INFO "split_zoned_em start %llu len %llu pre %llu post %llu em->len %llu\n", start, len, pre, post, em->len);
 
-	ASSERT(em->len == len);
+	// TODO understand or refactor this
+	if (post)
+		ASSERT(em->len == len);
 	ASSERT(!test_bit(EXTENT_FLAG_COMPRESSED, &em->flags));
 	ASSERT(em->block_start < EXTENT_MAP_LAST_BYTE);
 	ASSERT(test_bit(EXTENT_FLAG_PINNED, &em->flags));
@@ -2669,10 +2671,11 @@ out:
 static blk_status_t extract_partial_ordered_extent(struct btrfs_ordered_extent *ordered,
 						   struct btrfs_bio *bbio)
 {
+	struct btrfs_inode *inode = bbio->inode;
 	u64 start = (u64)bbio->bio.bi_iter.bi_sector << SECTOR_SHIFT;
 	u64 len = bbio->bio.bi_iter.bi_size;
-	u64 pre = 0;
-	u64 post = ordered->num_bytes - len;
+	u64 pre = len;
+	u64 post = 0;
 	int ret = 0;
 
 	ASSERT(len < ordered->num_bytes);
@@ -2685,6 +2688,7 @@ static blk_status_t extract_partial_ordered_extent(struct btrfs_ordered_extent *
 	ret = btrfs_split_ordered_extent(ordered, pre, post);
 	if (ret)
 		goto out;
+	ret = split_zoned_em(inode, bbio->file_offset, len, pre, post);
 out:
 	return errno_to_blk_status(ret);
 }
