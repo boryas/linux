@@ -26,6 +26,8 @@
 
 static struct kmem_cache *btrfs_path_cachep;
 
+#include <linux/delay.h>
+
 static int split_node(struct btrfs_trans_handle *trans, struct btrfs_root
 		      *root, struct btrfs_path *path, int level);
 static int split_leaf(struct btrfs_trans_handle *trans, struct btrfs_root *root,
@@ -2361,6 +2363,7 @@ again:
 			goto done;
 		}
 
+		//msleep(5000);
 		level = btrfs_header_level(b);
 		btrfs_tree_read_lock(b);
 		b = btrfs_tree_mod_log_rewind(fs_info, p, b, time_seq);
@@ -2785,9 +2788,11 @@ static int push_node_left(struct btrfs_trans_handle *trans,
 
 	if (push_items < src_nritems) {
 		/*
-		 * Don't call btrfs_tree_mod_log_insert_move() here, key removal
-		 * was already fully logged by btrfs_tree_mod_log_eb_copy() above.
+		 * Log the move, to keep the mod log accurate, but don't
+		 * double log removing the overwritten items at the front, that
+		 * was done in btrfs_tree_mod_log_eb_copy
 		 */
+		//ret = btrfs_tree_mod_log_insert_move(src, 0, push_items, src_nritems - push_items, false);
 		memmove_extent_buffer(src, btrfs_node_key_ptr_offset(src, 0),
 				      btrfs_node_key_ptr_offset(src, push_items),
 				      (src_nritems - push_items) *
@@ -2847,7 +2852,7 @@ static int balance_node_right(struct btrfs_trans_handle *trans,
 		btrfs_abort_transaction(trans, ret);
 		return ret;
 	}
-	ret = btrfs_tree_mod_log_insert_move(dst, push_items, 0, dst_nritems);
+	ret = btrfs_tree_mod_log_insert_move(dst, push_items, 0, dst_nritems, true);
 	BUG_ON(ret < 0);
 	memmove_extent_buffer(dst, btrfs_node_key_ptr_offset(dst, push_items),
 				      btrfs_node_key_ptr_offset(dst, 0),
@@ -2961,7 +2966,7 @@ static void insert_ptr(struct btrfs_trans_handle *trans,
 	if (slot != nritems) {
 		if (level) {
 			ret = btrfs_tree_mod_log_insert_move(lower, slot + 1,
-					slot, nritems - slot);
+					slot, nritems - slot, true);
 			BUG_ON(ret < 0);
 		}
 		memmove_extent_buffer(lower,
@@ -4369,7 +4374,7 @@ void btrfs_del_ptr(struct btrfs_root *root, struct btrfs_path *path, int level,
 	if (slot != nritems - 1) {
 		if (level) {
 			ret = btrfs_tree_mod_log_insert_move(parent, slot,
-					slot + 1, nritems - slot - 1);
+					slot + 1, nritems - slot - 1, true);
 			BUG_ON(ret < 0);
 		}
 		memmove_extent_buffer(parent,

@@ -250,7 +250,7 @@ int btrfs_tree_mod_log_insert_key(struct extent_buffer *eb, int slot,
 
 int btrfs_tree_mod_log_insert_move(struct extent_buffer *eb,
 				   int dst_slot, int src_slot,
-				   int nr_items)
+				   int nr_items, bool insert_overwrite_removes)
 {
 	struct tree_mod_elem *tm = NULL;
 	struct tree_mod_elem **tm_list = NULL;
@@ -295,10 +295,12 @@ int btrfs_tree_mod_log_insert_move(struct extent_buffer *eb,
 	 * This can only happen when we move towards the beginning of the
 	 * buffer, i.e. dst_slot < src_slot.
 	 */
-	for (i = 0; i + dst_slot < src_slot && i < nr_items; i++) {
-		ret = tree_mod_log_insert(eb->fs_info, tm_list[i]);
-		if (ret)
-			goto free_tms;
+	if (insert_overwrite_removes) {
+		for (i = 0; i + dst_slot < src_slot && i < nr_items; i++) {
+			ret = tree_mod_log_insert(eb->fs_info, tm_list[i]);
+			if (ret)
+				goto free_tms;
+		}
 	}
 
 	ret = tree_mod_log_insert(eb->fs_info, tm);
@@ -664,8 +666,11 @@ static void tree_mod_log_rewind(struct btrfs_fs_info *fs_info,
 	unsigned long o_dst;
 	unsigned long o_src;
 	unsigned long p_size = sizeof(struct btrfs_key_ptr);
+	u32 max_slot;
 
 	n = btrfs_header_nritems(eb);
+	max_slot = n - 1;
+	printk(KERN_INFO "BO: rewind start. eb %llu logical %llu seq %llu tm->seq %llu n %u max_slot %u\n", eb->start, time_seq, tm->logical, tm->seq, n, max_slot);
 	read_lock(&fs_info->tree_mod_log_lock);
 	while (tm && tm->seq >= time_seq) {
 		/*
@@ -684,6 +689,9 @@ static void tree_mod_log_rewind(struct btrfs_fs_info *fs_info,
 			btrfs_set_node_ptr_generation(eb, tm->slot,
 						      tm->generation);
 			n++;
+			if (max_slot == (u32)-1 || tm->slot > max_slot)
+				max_slot = tm->slot;
+			printk(KERN_INFO "BO: rewind remove. eb %llu logical %llu slot %d seq %llu n %u max_slot %u\n", eb->start, tm->logical, tm->slot, tm->seq, n, max_slot);
 			break;
 		case BTRFS_MOD_LOG_KEY_REPLACE:
 			BUG_ON(tm->slot >= n);
@@ -694,13 +702,21 @@ static void tree_mod_log_rewind(struct btrfs_fs_info *fs_info,
 			break;
 		case BTRFS_MOD_LOG_KEY_ADD:
 			/* if a move operation is needed it's in the log */
+			if (tm->slot == max_slot)
+				max_slot--;
 			n--;
+			printk(KERN_INFO "BO: rewind add. eb %llu logical %llu slot %d seq %llu n %u max_slot %u\n", eb->start, tm->logical, tm->slot, tm->seq, n, max_slot);
 			break;
 		case BTRFS_MOD_LOG_MOVE_KEYS:
 			o_dst = btrfs_node_key_ptr_offset(eb, tm->slot);
 			o_src = btrfs_node_key_ptr_offset(eb, tm->move.dst_slot);
 			memmove_extent_buffer(eb, o_dst, o_src,
 					      tm->move.nr_items * p_size);
+			WARN((tm->move.dst_slot + tm->move.nr_items - 1 > max_slot) ||
+			     (max_slot == (u32)-1 && tm->move.nr_items > 0),
+			     "INVALID MOVE!!! eb %llu slot %d dst_slot %d nr_items %d seq %llu n %u max_slot %u\n", eb->start, tm->slot, tm->move.dst_slot, tm->move.nr_items, tm->seq, n, max_slot);
+			max_slot = tm->slot + tm->move.nr_items - 1;
+			printk(KERN_INFO "BO: rewind move. eb %llu logical %llu slot %d dst_slot %d nr_items %d seq %llu n %u max_slot %u\n", eb->start, tm->logical, tm->slot, tm->move.dst_slot, tm->move.nr_items, tm->seq, n, max_slot);
 			break;
 		case BTRFS_MOD_LOG_ROOT_REPLACE:
 			/*
@@ -723,6 +739,7 @@ static void tree_mod_log_rewind(struct btrfs_fs_info *fs_info,
 	}
 	read_unlock(&fs_info->tree_mod_log_lock);
 	btrfs_set_header_nritems(eb, n);
+	printk(KERN_INFO "BO: rewind done eb %llu n %u max_slot %u\n", eb->start, n, max_slot);
 }
 
 /*
