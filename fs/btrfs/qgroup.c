@@ -30,6 +30,8 @@
 #include "root-tree.h"
 #include "tree-checker.h"
 
+#define QG_LIST_MAX 8
+
 /*
  * Helpers to access qgroup reservation
  *
@@ -154,6 +156,123 @@ static inline u64 qgroup_to_aux(struct btrfs_qgroup *qg)
 static inline struct btrfs_qgroup* unode_aux_to_qgroup(struct ulist_node *n)
 {
 	return (struct btrfs_qgroup *)(uintptr_t)n->aux;
+}
+
+struct qg_list {
+	bool small;
+	int count;
+	union {
+		struct btrfs_qgroup *arr[QG_LIST_MAX];
+		struct ulist *ul;
+	};
+};
+
+static void qg_list_init(struct qg_list *qgl)
+{
+	memset(qgl, 0, sizeof(*qgl));
+	qgl->small = true;
+}
+
+static void qg_list_free(struct qg_list *qgl)
+{
+	if (!qgl->small)
+		ulist_free(qgl->ul);
+}
+
+static int qg_list_arr_add(struct qg_list *qgl, struct btrfs_qgroup *qg)
+{
+	int i;
+
+	ASSERT(qgl->small);
+
+	if (qgl->count >= QG_LIST_MAX)
+		return 1;
+
+	for (i = 0; i < QG_LIST_MAX; ++i) {
+		if (!qgl->arr[i]) {
+			qgl->arr[i] = qg;
+			qgl->count++;
+			return 0;
+		}
+	}
+
+	WARN(1, "invalid qgroup list in array mode. count %d < %d, but no null array members", qgl->count, QG_LIST_MAX);
+	return 1;
+}
+
+static int qg_list_ul_add(struct qg_list *qgl, struct btrfs_qgroup *qg, gfp_mask_t gfp)
+{
+	ASSERT(!qgl->small);
+
+	return ulist_add(qgl->ul, qg->qgroupid, qgroup_to_aux(qg), gfp);
+}
+
+static int qg_list_arr_collect(struct qg_list *qgl, struct btrfs_qgroup *qgroup)
+{
+	int ret;
+	int pos = 0;
+
+	ASSERT(qgl->small);
+
+	ret = qg_list_arr_add(qgl, qg);
+	if (ret)
+		return ret;
+
+	while (!ret && qg) {
+		list_for_each_entry(glist, &qg->groups, next_group) {
+			ret = qg_list_arr_add(qgl, glist->group);
+			if (ret)
+				return ret;
+		}
+		qg = qgl->arr[++pos];
+	}
+
+	return 0;
+}
+
+static int qg_list_ul_collect(struct qg_list *qgl, struct btrfs_qgroup *qgroup, gfp_mask_t gfp)
+{
+	struct list *ul;
+	struct ulist_iterator uiter;
+	struct ulist_node *unode;
+	struct btrfs_qgroup_list *glist;
+	struct btrfs_qgroup *qg;
+	int ret = 0;
+
+	ASSERT(!qgl->small);
+
+	ret = qg_list_ul_add(qgl, qg, gfp);
+	if (ret < 0)
+		return ret;
+
+	ULIST_ITER_INIT(&uiter);
+	while ((unode = ulist_next(qgl->ul, &uiter))) {
+		qg = unode_aux_to_qgroup(unode);
+		list_for_each_entry(glist, &qg->groups, next_group) {
+			ret = qg_list_ul_add(qgl, glist->group, gfp);
+			if (ret < 0)
+				return ret;
+		}
+	}
+	return 0;
+}
+
+static int qg_list_collect(struct qg_list *qgl, struct btrfs_qgroup *qg, gfp_mask_t gfp)
+{
+	int ret;
+
+	ret = qg_list_arr_collect(qgl, qg);
+	if (ret <= 0)
+		return ret;
+
+	qgl->ul = ulist_alloc(gfp);
+	if (!qgl->ul)
+		return -ENOMEM;
+	qgl->small = false;
+	ret = qg_list_ul_collect(qgl, qg, gfp);
+	if (ret)
+		ulist_free(qgl->ul);
+	return ret;
 }
 
 static int
