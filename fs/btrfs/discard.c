@@ -243,6 +243,15 @@ static struct btrfs_block_group *peek_discard_list(
 
 	spin_lock(&discard_ctl->lock);
 again:
+	/*
+	 * add_to_discard_list is a no-op in this case, which can
+	 * loop infinitely. We won't do anything with the block_group
+	 * in the workfn anyway, so break out before we even peek.
+	 */
+	if (!btrfs_run_discard_work(discard_ctl)) {
+		block_group = NULL;
+		goto out_unlock;
+	}
 	block_group = find_next_block_group(discard_ctl, now);
 
 	if (block_group && now >= block_group->discard_eligible_time) {
@@ -266,8 +275,8 @@ again:
 		*discard_state = block_group->discard_state;
 		*discard_index = block_group->discard_index;
 	}
+out_unlock:
 	spin_unlock(&discard_ctl->lock);
-
 	return block_group;
 }
 
