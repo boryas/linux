@@ -1401,6 +1401,8 @@ static noinline int add_inode_ref(struct btrfs_trans_handle *trans,
 		if (log_ref_ver) {
 			ret = extref_get_fields(eb, ref_ptr, &name,
 						&ref_index, &parent_objectid);
+			if (ret)
+				goto out;
 			/*
 			 * parent object can change from one array
 			 * item to another.
@@ -1409,18 +1411,18 @@ static noinline int add_inode_ref(struct btrfs_trans_handle *trans,
 				dir = read_one_inode(root, parent_objectid);
 			if (!dir) {
 				ret = -ENOENT;
-				goto out;
+				goto free_name;
 			}
 		} else {
 			ret = ref_get_fields(eb, ref_ptr, &name, &ref_index);
 		}
 		if (ret)
-			goto out;
+			goto free_name;
 
 		ret = inode_in_dir(root, path, btrfs_ino(BTRFS_I(dir)),
 				   btrfs_ino(BTRFS_I(inode)), ref_index, &name);
 		if (ret < 0) {
-			goto out;
+			goto free_name;
 		} else if (ret == 0) {
 			/*
 			 * look for a conflicting back reference in the
@@ -1436,18 +1438,18 @@ static noinline int add_inode_ref(struct btrfs_trans_handle *trans,
 			if (ret) {
 				if (ret == 1)
 					ret = 0;
-				goto out;
+				goto free_name;
 			}
 
 			/* insert our name */
 			ret = btrfs_add_link(trans, BTRFS_I(dir), BTRFS_I(inode),
 					     &name, 0, ref_index);
 			if (ret)
-				goto out;
+				goto free_name;
 
 			ret = btrfs_update_inode(trans, root, BTRFS_I(inode));
 			if (ret)
-				goto out;
+				goto free_name;
 		}
 		/* Else, ret == 1, we already have a perfect match, we're done. */
 
@@ -1471,13 +1473,14 @@ static noinline int add_inode_ref(struct btrfs_trans_handle *trans,
 	ret = unlink_old_inode_refs(trans, root, path, BTRFS_I(inode), eb, slot,
 				    key);
 	if (ret)
-		goto out;
+		goto free_name;
 
 	/* finally write the back reference in the inode */
 	ret = overwrite_item(trans, root, path, eb, slot, key);
+free_name:
+	kfree(name.name);
 out:
 	btrfs_release_path(path);
-	kfree(name.name);
 	iput(dir);
 	iput(inode);
 	return ret;
