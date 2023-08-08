@@ -116,6 +116,10 @@ static u64 block_rsv_release_bytes(struct btrfs_fs_info *fs_info,
 		num_bytes = block_rsv->size;
 		qgroup_to_release = block_rsv->qgroup_rsv_size;
 	}
+	if (block_rsv->size < num_bytes) {
+		btrfs_warn(fs_info, "block_rsv size underflow size %llu num_bytes %llu", block_rsv->size, num_bytes);
+		num_bytes = block_rsv->size;
+	}
 	block_rsv->size -= num_bytes;
 	if (block_rsv->reserved >= block_rsv->size) {
 		num_bytes = block_rsv->reserved - block_rsv->size;
