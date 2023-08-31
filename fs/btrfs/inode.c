@@ -2098,7 +2098,7 @@ next_slot:
 			goto must_cow;
 
 		ret = 0;
-		nocow_bg = btrfs_inc_nocow_writers(fs_info, nocow_args.disk_bytenr);
+		nocow_bg = btrfs_inc_nocow_writers(fs_info, inode, nocow_args.disk_bytenr);
 		if (!nocow_bg) {
 must_cow:
 			/*
@@ -7303,7 +7303,7 @@ static int btrfs_get_blocks_direct_write(struct extent_map **map,
 
 		if (can_nocow_extent(inode, start, &len, &orig_start,
 				     &orig_block_len, &ram_bytes, false, false) == 1) {
-			bg = btrfs_inc_nocow_writers(fs_info, block_start);
+			bg = btrfs_inc_nocow_writers(fs_info, BTRFS_I(inode), block_start);
 			if (bg)
 				can_nocow = true;
 		}

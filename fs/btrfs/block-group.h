@@ -282,6 +282,7 @@ void btrfs_dec_block_group_reservations(struct btrfs_fs_info *fs_info,
 					const u64 start);
 void btrfs_wait_block_group_reservations(struct btrfs_block_group *bg);
 struct btrfs_block_group *btrfs_inc_nocow_writers(struct btrfs_fs_info *fs_info,
+						  struct btrfs_inode *inode,
 						  u64 bytenr);
 void btrfs_dec_nocow_writers(struct btrfs_block_group *bg);
 void btrfs_wait_nocow_writers(struct btrfs_block_group *bg);

@@ -4110,7 +4110,9 @@ int btrfs_relocate_block_group(struct btrfs_fs_info *fs_info, u64 group_start)
 	describe_relocation(fs_info, rc->block_group);
 
 	btrfs_wait_block_group_reservations(rc->block_group);
+	printk(KERN_INFO "BO: reloc wait nocow\n");
 	btrfs_wait_nocow_writers(rc->block_group);
+	printk(KERN_INFO "BO: reloc wait nocow done\n");
 	btrfs_wait_ordered_roots(fs_info, U64_MAX,
 				 rc->block_group->start,
 				 rc->block_group->length);
@@ -4414,6 +4416,7 @@ int btrfs_reloc_clone_csums(struct btrfs_ordered_extent *ordered)
 		 * disk length.
 		 */
 		sums->logical = ordered->disk_bytenr + sums->logical - disk_bytenr;
+		printk(KERN_INFO "BO: %d: clone ordered sum %llu %u\n", current->pid, sums->logical, sums->len);
 		btrfs_add_ordered_sum(ordered, sums);
 	}
 

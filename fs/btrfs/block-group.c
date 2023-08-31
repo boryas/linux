@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include "linux/btrfs_tree.h"
 #include <linux/sizes.h>
 #include <linux/list_sort.h>
 #include "misc.h"
@@ -21,6 +22,10 @@
 #include "fs.h"
 #include "accessors.h"
 #include "extent-tree.h"
+
+#include <linux/delay.h>
+#include <linux/timekeeping.h>
+#include <linux/ktime.h>
 
 #ifdef CONFIG_BTRFS_DEBUG
 int btrfs_should_fragment_free_space(struct btrfs_block_group *block_group)
@@ -314,6 +319,7 @@ struct btrfs_block_group *btrfs_next_block_group(
  *          Or NULL if we can not do a NOCOW write
  */
 struct btrfs_block_group *btrfs_inc_nocow_writers(struct btrfs_fs_info *fs_info,
+						  struct btrfs_inode *inode,
 						  u64 bytenr)
 {
 	struct btrfs_block_group *bg;
@@ -327,7 +333,21 @@ struct btrfs_block_group *btrfs_inc_nocow_writers(struct btrfs_fs_info *fs_info,
 	if (bg->ro)
 		can_nocow = false;
 	else
+	{
+		u64 start = ktime_get_ns();
+		u64 now = start;
+		u64 end = start + 1000000000;
+
+		if (inode->root->root_key.objectid != BTRFS_DATA_RELOC_TREE_OBJECTID) {
+			// dumbest sleep ever?
+			printk(KERN_INFO "BO: %d: inc nocow fake sleep start %llu end %llu\n", current->pid, start, end);
+			while (now < end) {
+				now = ktime_get_ns();
+			}
+			printk(KERN_INFO "BO: %d: inc nocow fake sleep done start %llu end %llu now %llu\n", current->pid, start, end, now);
+		}
 		atomic_inc(&bg->nocow_writers);
+	}
 	spin_unlock(&bg->lock);
 
 	if (!can_nocow) {
