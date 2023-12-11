@@ -152,15 +152,11 @@ static inline unsigned long get_eb_page_index(unsigned long offset)
 struct extent_changeset {
 	/* How many bytes are set/cleared in this operation */
 	u64 bytes_changed;
-
-	/* Changed ranges */
-	struct ulist range_changed;
 };
 
 static inline void extent_changeset_init(struct extent_changeset *changeset)
 {
 	changeset->bytes_changed = 0;
-	ulist_init(&changeset->range_changed);
 }
 
 static inline struct extent_changeset *extent_changeset_alloc(void)
@@ -180,7 +176,6 @@ static inline void extent_changeset_release(struct extent_changeset *changeset)
 	if (!changeset)
 		return;
 	changeset->bytes_changed = 0;
-	ulist_release(&changeset->range_changed);
 }
 
 static inline void extent_changeset_free(struct extent_changeset *changeset)
