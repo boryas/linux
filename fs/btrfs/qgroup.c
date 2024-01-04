@@ -3915,8 +3915,11 @@ out:
 	return ret;
 }
 
-static int qgroup_reserve_data(struct btrfs_inode *inode, u64 start, u64 len)
+static int qgroup_reserve_data(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl)
 {
+	struct btrfs_inode *inode = rsv_ctl->inode;
+	u64 start = rsv_ctl->start;
+	u64 len = rsv_ctl->len;
 	struct btrfs_root *root = inode->root;
 	u64 pos = start;
 	u64 end = start + len - 1;
@@ -3976,9 +3979,12 @@ cleanup:
  * NOTE: This function may sleep for memory allocation, dirty page flushing and
  *	 commit transaction. So caller should not hold any dirty page locked.
  */
-int btrfs_qgroup_reserve_data(struct btrfs_inode *inode, u64 start, u64 len)
+int btrfs_qgroup_reserve_data(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl)
 {
 	int ret;
+	struct btrfs_inode *inode = rsv_ctl->inode;
+	u64 start = rsv_ctl->start;
+	u64 len = rsv_ctl->len;
 
 	ret = qgroup_reserve_data(inode, start, len);
 	if (ret <= 0 && ret != -EDQUOT)
@@ -3990,8 +3996,11 @@ int btrfs_qgroup_reserve_data(struct btrfs_inode *inode, u64 start, u64 len)
 	return qgroup_reserve_data(inode, start, len);
 }
 
-int btrfs_qgroup_rollback_data_reservation(struct btrfs_inode *inode, u64 start, u64 len)
+int btrfs_qgroup_rollback_data_reservation(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl)
 {
+	struct btrfs_inode *inode = rsv_ctl->inode;
+	u64 start = rsv_ctl->start;
+	u64 len = rsv_ctl->len;
 	struct btrfs_root *root = inode->root;
 	struct extent_changeset changeset = { 0 };
 	u64 ret;
@@ -4005,15 +4014,21 @@ int btrfs_qgroup_rollback_data_reservation(struct btrfs_inode *inode, u64 start,
 	return ret;
 }
 
-int btrfs_qgroup_commit_data_reservation(struct btrfs_inode *inode, u64 start, u64 len)
+int btrfs_qgroup_commit_data_reservation(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl)
 {
+	struct btrfs_inode *inode = rsv_ctl->inode;
+	u64 start = rsv_ctl->start;
+	u64 len = rsv_ctl->len;
 	return convert_extent_bit(&inode->io_tree, start, start + len -1,
 				  EXTENT_QGROUP_RESERVED, EXTENT_QGROUP_RESERVING, NULL);
 }
 
 
-int btrfs_qgroup_free_data_reservation(struct btrfs_inode *inode, u64 start, u64 len)
+int btrfs_qgroup_free_data_reservation(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl)
 {
+	struct btrfs_inode *inode = rsv_ctl->inode;
+	u64 start = rsv_ctl->start;
+	u64 len = rsv_ctl->len;
 	struct btrfs_root *root = inode->root;
 	struct extent_changeset changeset = { 0 };
 	u64 ret;
@@ -4027,9 +4042,11 @@ int btrfs_qgroup_free_data_reservation(struct btrfs_inode *inode, u64 start, u64
 	return ret;
 }
 
-int btrfs_qgroup_release_data_reservation(struct btrfs_inode *inode, u64 start, u64 len,
-					  struct extent_changeset *released)
+int btrfs_qgroup_release_data_reservation(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl)
 {
+	struct btrfs_inode *inode = rsv_ctl->inode;
+	u64 start = rsv_ctl->start;
+	u64 len = rsv_ctl->len;
 	return clear_record_extent_bits(&inode->io_tree, start, start + len - 1,
 					EXTENT_QGROUP_RESERVED, released);
 }

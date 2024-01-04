@@ -128,10 +128,12 @@ int btrfs_alloc_data_chunk_ondemand(struct btrfs_inode *inode, u64 bytes)
 	return btrfs_reserve_data_bytes(fs_info, bytes, flush);
 }
 
-int btrfs_check_data_free_space(struct btrfs_inode *inode,
-				struct extent_changeset **reserved, u64 start,
-				u64 len, bool noflush)
+int btrfs_check_data_free_space(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl,
+				bool noflush)
 {
+	struct btrfs_inode *inode = rsv_ctl->inode;
+	u64 start = rsv_ctl->start;
+	u64 len = rsv_ctl->len;
 	struct btrfs_fs_info *fs_info = inode->root->fs_info;
 	enum btrfs_reserve_flush_enum flush = BTRFS_RESERVE_FLUSH_DATA;
 	int ret;
@@ -151,11 +153,9 @@ int btrfs_check_data_free_space(struct btrfs_inode *inode,
 		return ret;
 
 	/* Use new btrfs_qgroup_reserve_data to reserve precious data space. */
-	ret = btrfs_qgroup_reserve_data(inode, reserved, start, len);
+	ret = btrfs_qgroup_reserve_data(rsv_ctl);
 	if (ret < 0) {
 		btrfs_free_reserved_data_space_noquota(fs_info, len);
-		extent_changeset_free(*reserved);
-		*reserved = NULL;
 	} else {
 		ret = 0;
 	}
@@ -188,9 +188,11 @@ void btrfs_free_reserved_data_space_noquota(struct btrfs_fs_info *fs_info,
  * This one will handle the per-inode data rsv map for accurate reserved
  * space framework.
  */
-void btrfs_free_reserved_data_space(struct btrfs_inode *inode,
-			struct extent_changeset *reserved, u64 start, u64 len)
+void btrfs_free_reserved_data_space(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl)
 {
+	struct btrfs_inode *inode = rsv_ctl->inode;
+	u64 start = rsv_ctl->start;
+	u64 len = rsv_ctl->len;
 	struct btrfs_fs_info *fs_info = inode->root->fs_info;
 
 	/* Make sure the range is aligned to sectorsize */
@@ -199,7 +201,7 @@ void btrfs_free_reserved_data_space(struct btrfs_inode *inode,
 	start = round_down(start, fs_info->sectorsize);
 
 	btrfs_free_reserved_data_space_noquota(fs_info, len);
-	btrfs_qgroup_free_data(inode, reserved, start, len, NULL);
+	btrfs_qgroup_free_data_reservation(rsv_ctl);
 }
 
 /*
@@ -461,13 +463,18 @@ int btrfs_delalloc_reserve_space(struct btrfs_inode *inode,
 			struct extent_changeset **reserved, u64 start, u64 len)
 {
 	int ret;
+	struct btrfs_qgroup_data_rsv_ctl rsv_ctl = {
+		.inode = inode,
+		.start = start,
+		.len = len,
+	};
 
-	ret = btrfs_check_data_free_space(inode, reserved, start, len, false);
+	ret = btrfs_check_data_free_space(&rsv_ctl, false);
 	if (ret < 0)
 		return ret;
 	ret = btrfs_delalloc_reserve_metadata(inode, len, len, false);
 	if (ret < 0) {
-		btrfs_free_reserved_data_space(inode, *reserved, start, len);
+		btrfs_free_reserved_data_space(&rsv_ctl);
 		extent_changeset_free(*reserved);
 		*reserved = NULL;
 	}

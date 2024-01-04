@@ -1185,6 +1185,7 @@ static noinline ssize_t btrfs_buffered_write(struct kiocb *iocb,
 	struct btrfs_fs_info *fs_info = btrfs_sb(inode->i_sb);
 	struct page **pages = NULL;
 	struct extent_changeset *data_reserved = NULL;
+	struct btrfs_qgroup_data_rsv_ctl rsv_ctl = { 0 };
 	u64 release_bytes = 0;
 	u64 lockstart;
 	u64 lockend;

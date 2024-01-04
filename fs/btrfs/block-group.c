@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include "qgroup.h"
 #include <linux/sizes.h>
 #include <linux/list_sort.h>
 #include "misc.h"
@@ -3023,7 +3024,7 @@ static int cache_save_setup(struct btrfs_block_group *block_group,
 {
 	struct btrfs_fs_info *fs_info = block_group->fs_info;
 	struct inode *inode = NULL;
-	struct extent_changeset *data_reserved = NULL;
+	struct btrfs_qgroup_data_rsv_ctl rsv_ctl = { 0 };
 	u64 alloc_hint = 0;
 	int dcs = BTRFS_DC_ERROR;
 	u64 cache_size = 0;
@@ -3144,9 +3145,11 @@ again:
 
 	cache_size *= 16;
 	cache_size *= fs_info->sectorsize;
+	rsv_ctl.inode = BTRFS_I(inode);
+	rsv_ctl.start = 0;
+	rsv_ctl.len = cache_size;
 
-	ret = btrfs_check_data_free_space(BTRFS_I(inode), &data_reserved, 0,
-					  cache_size, false);
+	ret = btrfs_check_data_free_space(&rsv_ctl, false);
 	if (ret)
 		goto out_put;
 
@@ -3177,7 +3180,6 @@ out:
 	block_group->disk_cache_state = dcs;
 	spin_unlock(&block_group->lock);
 
-	extent_changeset_free(data_reserved);
 	return ret;
 }
 

@@ -353,13 +353,55 @@ int btrfs_verify_qgroup_counts(struct btrfs_fs_info *fs_info, u64 qgroupid,
 			       u64 rfer, u64 excl);
 #endif
 
+/*
+ * Qgroup reservations go through a relatively complicated state machine,
+ * as they must accurately track ranges of files without double counting
+ * to accurately enforce quotas.
+ *
+ * The lifecycle is as follows:
+ * REQUEST:	No effect yet, this represents a new request for a reservation
+ * RESERVING:	The inode extent tree has partial reservations, but an error
+ *		needs to back them out.
+ * RESERVED:	The reservation is fully complete. Additional attempts to
+ *		reserve in this range are a no-op from an rsv perspective.
+ * RELEASED:	The ordered extent for the reservation has been allocated
+ *		and inserted into the io tree, so the reservation bits are
+ *		cleared from the inode extent tree but not yet freed. Nocow
+ *		writes skip this and go straight to freeing, as a second write
+ *		at this point would *not* constitute a second space reservation.
+ * FREED:	The delayed ref has run, and the rsv has been fully freed.
+ */
+enum btrfs_qgroup_data_rsv_state {
+	BTRFS_QGROUP_DATA_RSV_REQUEST,
+	BTRFS_QGROUP_DATA_RSV_RESERVING,
+	BTRFS_QGROUP_DATA_RSV_RESERVED,
+	BTRFS_QGROUP_DATA_RSV_RELEASED,
+	BTRFS_QGROUP_DATA_RSV_FREED,
+};
+
+/*
+ * Tracks the lifecycle of a qgroup reservation.
+ *
+ * Invariants:
+ * Always: start, len set to the requested range.
+ * state == REQUEST: reserved invalid.
+ * state >= RESERVING: reserved set to what actually changed in the extent tree
+ * state == FREED: reserved = 0
+ */
+struct btrfs_qgroup_data_rsv_ctl {
+	struct btrfs_inode *inode;
+	u64 start;
+	u64 len;
+	u64 reserved;
+	enum btrfs_qgroup_data_rsv_state state;
+};
 /* New io_tree based accurate qgroup reserve API */
-int btrfs_qgroup_reserve_data(struct btrfs_inode *inode, u64 start, u64 len);
-int btrfs_qgroup_rollback_data_reservation(struct btrfs_inode *inode, u64 start, u64 len);
-int btrfs_qgroup_commit_data_reservation(struct btrfs_inode *inode, u64 start, u64 len);
-int btrfs_qgroup_free_data_reservation(struct btrfs_inode *inode, u64 start, u64 len);
-int btrfs_qgroup_release_data_reservation(struct btrfs_inode *inode, u64 start, u64 len,
-					  struct extent_changeset *released);
+int btrfs_qgroup_reserve_data(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl);
+int btrfs_qgroup_rollback_data_reservation(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl);
+int btrfs_qgroup_commit_data_reservation(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl);
+int btrfs_qgroup_free_data_reservation(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl);
+int btrfs_qgroup_release_data_reservation(struct btrfs_qgroup_data_rsv_ctl *rsv_ctl);
+
 int btrfs_qgroup_reserve_meta(struct btrfs_root *root, int num_bytes,
 			      enum btrfs_qgroup_rsv_type type, bool enforce);
 int __btrfs_qgroup_reserve_meta(struct btrfs_root *root, int num_bytes,
