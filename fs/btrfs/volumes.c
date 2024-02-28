@@ -503,11 +503,13 @@ error:
 }
 
 /*
- *  Search and remove all stale devices (which are not mounted).  When both
+ *  Search and remove all stale devices (which are not mounted).  When all
  *  inputs are NULL, it will search and release all stale devices.
  *
  *  @devt:         Optional. When provided will it release all unmounted devices
- *                 matching this devt only.
+ *                 matching this devt only. Don't set together with name.
+ *  @name:         Optional. When provided will it release all unmounted devices
+ *                 matching this name only. Don't set together with devt.
  *  @skip_device:  Optional. Will skip this device when searching for the stale
  *                 devices.
  *
@@ -515,14 +517,16 @@ error:
  *		-EBUSY if @devt is a mounted device.
  *		-ENOENT if @devt does not match any device in the list.
  */
-static int btrfs_free_stale_devices(dev_t devt, struct btrfs_device *skip_device)
+static int btrfs_free_stale_devices(dev_t devt, char *name, struct btrfs_device *skip_device)
 {
 	struct btrfs_fs_devices *fs_devices, *tmp_fs_devices;
 	struct btrfs_device *device, *tmp_device;
 	int ret;
 	bool freed = false;
+	bool searching = devt || name;
 
 	lockdep_assert_held(&uuid_mutex);
+	ASSERT(!(devt && name));
 
 	/* Return good status if there is no instance of devt. */
 	ret = 0;
@@ -533,14 +537,18 @@ static int btrfs_free_stale_devices(dev_t devt, struct btrfs_device *skip_device
 					 &fs_devices->devices, dev_list) {
 			if (skip_device && skip_device == device)
 				continue;
+			if (!searching)
+				goto found;
 			if (devt && devt != device->devt)
 				continue;
+			if (name && device->name && strcmp(device->name->str, name))
+				continue;
+found:
 			if (fs_devices->opened) {
-				if (devt)
+				if (searching)
 					ret = -EBUSY;
 				break;
 			}
-
 			/* delete the stale device */
 			fs_devices->num_devices--;
 			list_del(&device->dev_list);
@@ -1288,12 +1296,32 @@ static struct btrfs_super_block *btrfs_read_disk_super(struct block_device *bdev
 	return disk_super;
 }
 
+int btrfs_forget_devices_by_name(char *name)
+{
+	int ret;
+	dev_t devt = 0;
+
+	/*
+	 * Ideally, use devt, but if not, use name.
+	 * Note: Assumes lookup_bdev handles NULL name gracefully.
+	 */
+	ret = lookup_bdev(name, &devt);
+	if (!ret)
+		name = NULL;
+
+	mutex_lock(&uuid_mutex);
+	ret = btrfs_free_stale_devices(devt, name, NULL);
+	mutex_unlock(&uuid_mutex);
+
+	return ret;
+}
+
 int btrfs_forget_devices(dev_t devt)
 {
 	int ret;
 
 	mutex_lock(&uuid_mutex);
-	ret = btrfs_free_stale_devices(devt, NULL);
+	ret = btrfs_free_stale_devices(devt, NULL, NULL);
 	mutex_unlock(&uuid_mutex);
 
 	return ret;
@@ -1364,7 +1392,7 @@ struct btrfs_device *btrfs_scan_one_device(const char *path, blk_mode_t flags,
 			btrfs_warn(NULL, "lookup bdev failed for path %s: %d",
 				   path, ret);
 		else
-			btrfs_free_stale_devices(devt, NULL);
+			btrfs_free_stale_devices(devt, NULL, NULL);
 
 		pr_debug("BTRFS: skip registering single non-seed device %s\n", path);
 		device = NULL;
@@ -1373,7 +1401,7 @@ struct btrfs_device *btrfs_scan_one_device(const char *path, blk_mode_t flags,
 
 	device = device_list_add(path, disk_super, &new_device_added);
 	if (!IS_ERR(device) && new_device_added)
-		btrfs_free_stale_devices(device->devt, device);
+		btrfs_free_stale_devices(device->devt, NULL, device);
 
 free_disk_super:
 	btrfs_release_disk_super(disk_super);

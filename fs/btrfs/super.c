@@ -2192,7 +2192,7 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 {
 	struct btrfs_ioctl_vol_args *vol;
 	struct btrfs_device *device = NULL;
-	dev_t devt = 0;
+	char *name = NULL;
 	int ret = -ENOTTY;
 
 	if (!capable(CAP_SYS_ADMIN))
@@ -2217,12 +2217,9 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 		mutex_unlock(&uuid_mutex);
 		break;
 	case BTRFS_IOC_FORGET_DEV:
-		if (vol->name[0] != 0) {
-			ret = lookup_bdev(vol->name, &devt);
-			if (ret)
-				break;
-		}
-		ret = btrfs_forget_devices(devt);
+		if (vol->name[0] != 0)
+			name = vol->name;
+		ret = btrfs_forget_devices_by_name(name);
 		break;
 	case BTRFS_IOC_DEVICES_READY:
 		mutex_lock(&uuid_mutex);
