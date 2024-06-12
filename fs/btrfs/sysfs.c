@@ -2376,6 +2376,47 @@ static ssize_t btrfs_qgroup_rsv_show_##_name(struct kobject *qgroup_kobj,	\
 }										\
 BTRFS_ATTR(qgroup, rsv_##_name, btrfs_qgroup_rsv_show_##_name)
 
+static ssize_t btrfs_qgroup_show_parents(struct kobject *qgroup_kobj,
+					 struct kobj_attribute *a, char *buf)
+{
+	LIST_HEAD(parents);
+	struct btrfs_fs_info *fs_info = qgroup_kobj_to_fs_info(qgroup_kobj);
+	struct btrfs_qgroup *qgroup = container_of(qgroup_kobj, struct btrfs_qgroup, kobj);
+	struct btrfs_qgroup_list *glist;
+	ssize_t ret = 0;
+
+	spin_lock(&fs_info->qgroup_lock);
+	list_for_each_entry(glist, &qgroup->groups, next_group)
+		ret += sysfs_emit_at(buf, ret, "%hu_%llu\n",
+				     btrfs_qgroup_level(glist->group->qgroupid),
+				     btrfs_qgroup_subvolid(glist->group->qgroupid));
+	spin_unlock(&fs_info->qgroup_lock);
+
+	return ret;
+}
+BTRFS_ATTR(qgroup, parents, btrfs_qgroup_show_parents);
+
+static ssize_t btrfs_qgroup_show_children(struct kobject *qgroup_kobj,
+					 struct kobj_attribute *a, char *buf)
+{
+	LIST_HEAD(children);
+	struct btrfs_fs_info *fs_info = qgroup_kobj_to_fs_info(qgroup_kobj);
+	struct btrfs_qgroup *qgroup = container_of(qgroup_kobj, struct btrfs_qgroup, kobj);
+	struct btrfs_qgroup_list *glist;
+	ssize_t ret = 0;
+
+	spin_lock(&fs_info->qgroup_lock);
+	list_for_each_entry(glist, &qgroup->members, next_member)
+		ret += sysfs_emit_at(buf, ret, "%hu_%llu\n",
+				     btrfs_qgroup_level(glist->member->qgroupid),
+				     btrfs_qgroup_subvolid(glist->member->qgroupid));
+	spin_unlock(&fs_info->qgroup_lock);
+
+	return ret;
+}
+BTRFS_ATTR(qgroup, children, btrfs_qgroup_show_children);
+
+
 QGROUP_ATTR(rfer, referenced);
 QGROUP_ATTR(excl, exclusive);
 QGROUP_ATTR(max_rfer, max_referenced);
@@ -2399,6 +2440,8 @@ static struct attribute *qgroup_attrs[] = {
 	BTRFS_ATTR_PTR(qgroup, rsv_data),
 	BTRFS_ATTR_PTR(qgroup, rsv_meta_pertrans),
 	BTRFS_ATTR_PTR(qgroup, rsv_meta_prealloc),
+	BTRFS_ATTR_PTR(qgroup, parents),
+	BTRFS_ATTR_PTR(qgroup, children),
 	NULL
 };
 ATTRIBUTE_GROUPS(qgroup);

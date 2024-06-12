@@ -202,6 +202,16 @@ struct btrfs_qgroup_rsv {
 };
 
 /*
+ * glue structure to represent the relations between qgroups.
+ */
+struct btrfs_qgroup_list {
+	struct list_head next_group;
+	struct list_head next_member;
+	struct btrfs_qgroup *group;
+	struct btrfs_qgroup *member;
+};
+
+/*
  * one struct for each qgroup, organized in fs_info->qgroup_tree.
  */
 struct btrfs_qgroup {
