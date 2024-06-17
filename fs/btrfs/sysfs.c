@@ -2453,10 +2453,24 @@ static void qgroup_release(struct kobject *kobj)
 	memset(&qgroup->kobj, 0, sizeof(*kobj));
 }
 
+static void qgroup_get_ownership(const struct kobject *qgroup_kobj, kuid_t *uid, kgid_t *gid)
+{
+	struct btrfs_qgroup *qgroup = container_of(qgroup_kobj, struct btrfs_qgroup, kobj);
+	struct btrfs_fs_info *fs_info = qgroup_kobj_to_fs_info((struct kobject *)qgroup_kobj);
+	int ret;
+
+	ret = btrfs_qgroup_get_ownership(fs_info, qgroup, uid, gid);
+	if (ret) {
+		*uid = GLOBAL_ROOT_UID;
+		*gid = GLOBAL_ROOT_GID;
+	}
+}
+
 static const struct kobj_type qgroup_ktype = {
 	.sysfs_ops = &kobj_sysfs_ops,
 	.release = qgroup_release,
 	.default_groups = qgroup_groups,
+	.get_ownership = qgroup_get_ownership,
 };
 
 int btrfs_sysfs_add_one_qgroup(struct btrfs_fs_info *fs_info,

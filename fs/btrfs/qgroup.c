@@ -4940,3 +4940,32 @@ out:
 	spin_unlock(&fs_info->qgroup_lock);
 	return ret;
 }
+
+int btrfs_qgroup_get_ownership(struct btrfs_fs_info *fs_info,
+			       struct btrfs_qgroup *qgroup,
+			       kuid_t *uid, kgid_t *gid)
+{
+	struct btrfs_root *root;
+	struct inode *inode;
+	int ret;
+
+	if (btrfs_qgroup_level(qgroup->qgroupid))
+		return -EINVAL;
+
+	root = btrfs_get_fs_root(fs_info, qgroup->qgroupid, true);
+	if (IS_ERR(root))
+		return PTR_ERR(fs_info->fs_root);
+
+	inode = btrfs_iget(fs_info->sb, BTRFS_FIRST_FREE_OBJECTID, root);
+	if (!inode) {
+		ret = -ENOENT;
+		goto put_root;
+	}
+	ret = 0;
+	*uid = inode->i_uid;
+	*gid = inode->i_gid;
+	iput(inode);
+put_root:
+	btrfs_put_root(root);
+	return ret;
+}
