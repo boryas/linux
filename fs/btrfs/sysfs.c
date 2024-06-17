@@ -3,6 +3,8 @@
  * Copyright (C) 2007 Oracle.  All rights reserved.
  */
 
+#include "linux/sysfs.h"
+#include "linux/stat.h"
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
 #include <linux/slab.h>
@@ -76,6 +78,10 @@ struct raid_kobject {
 #define BTRFS_ATTR(_prefix, _name, _show)				\
 	static struct kobj_attribute btrfs_attr_##_prefix##_##_name =	\
 			__INIT_KOBJ_ATTR(_name, 0444, _show, NULL)
+
+#define BTRFS_ATTR_PROT(_prefix, _name, _show)				\
+	static struct kobj_attribute btrfs_attr_##_prefix##_##_name =	\
+			__INIT_KOBJ_ATTR(_name, 0440, _show, NULL)
 
 #define BTRFS_ATTR_PTR(_prefix, _name)					\
 	(&btrfs_attr_##_prefix##_##_name.attr)
@@ -2361,7 +2367,7 @@ static ssize_t btrfs_qgroup_show_##_member(struct kobject *qgroup_kobj,		\
 			struct btrfs_qgroup, kobj);				\
 	return btrfs_show_u64(&qgroup->_member, &fs_info->qgroup_lock, buf);	\
 }										\
-BTRFS_ATTR(qgroup, _show_name, btrfs_qgroup_show_##_member)
+BTRFS_ATTR_PROT(qgroup, _show_name, btrfs_qgroup_show_##_member)
 
 #define QGROUP_RSV_ATTR(_name, _type)						\
 static ssize_t btrfs_qgroup_rsv_show_##_name(struct kobject *qgroup_kobj,	\
@@ -2374,7 +2380,7 @@ static ssize_t btrfs_qgroup_rsv_show_##_name(struct kobject *qgroup_kobj,	\
 	return btrfs_show_u64(&qgroup->rsv.values[_type],			\
 			&fs_info->qgroup_lock, buf);				\
 }										\
-BTRFS_ATTR(qgroup, rsv_##_name, btrfs_qgroup_rsv_show_##_name)
+BTRFS_ATTR_PROT(qgroup, rsv_##_name, btrfs_qgroup_rsv_show_##_name)
 
 static ssize_t btrfs_qgroup_show_parents(struct kobject *qgroup_kobj,
 					 struct kobj_attribute *a, char *buf)
@@ -2394,7 +2400,7 @@ static ssize_t btrfs_qgroup_show_parents(struct kobject *qgroup_kobj,
 
 	return ret;
 }
-BTRFS_ATTR(qgroup, parents, btrfs_qgroup_show_parents);
+BTRFS_ATTR_PROT(qgroup, parents, btrfs_qgroup_show_parents);
 
 static ssize_t btrfs_qgroup_show_children(struct kobject *qgroup_kobj,
 					 struct kobj_attribute *a, char *buf)
@@ -2414,8 +2420,7 @@ static ssize_t btrfs_qgroup_show_children(struct kobject *qgroup_kobj,
 
 	return ret;
 }
-BTRFS_ATTR(qgroup, children, btrfs_qgroup_show_children);
-
+BTRFS_ATTR_PROT(qgroup, children, btrfs_qgroup_show_children);
 
 QGROUP_ATTR(rfer, referenced);
 QGROUP_ATTR(excl, exclusive);
@@ -2425,6 +2430,12 @@ QGROUP_ATTR(lim_flags, limit_flags);
 QGROUP_RSV_ATTR(data, BTRFS_QGROUP_RSV_DATA);
 QGROUP_RSV_ATTR(meta_pertrans, BTRFS_QGROUP_RSV_META_PERTRANS);
 QGROUP_RSV_ATTR(meta_prealloc, BTRFS_QGROUP_RSV_META_PREALLOC);
+
+static umode_t qgroup_visible(struct kobject *qgroup_kobj,
+			      struct attribute *attr, int unused)
+{
+	return S_IRUSR;
+}
 
 /*
  * Qgroup information.
@@ -2444,7 +2455,15 @@ static struct attribute *qgroup_attrs[] = {
 	BTRFS_ATTR_PTR(qgroup, children),
 	NULL
 };
-ATTRIBUTE_GROUPS(qgroup);
+static const struct attribute_group qgroup_group = {
+	.is_visible = qgroup_visible,
+	.attrs = qgroup_attrs,
+};
+
+static const struct attribute_group *qgroup_groups[] = {
+	&qgroup_group,
+	NULL,
+};
 
 static void qgroup_release(struct kobject *kobj)
 {
@@ -2473,6 +2492,11 @@ static const struct kobj_type qgroup_ktype = {
 	.get_ownership = qgroup_get_ownership,
 };
 
+static void kobj_dir_ro(struct kobject *kobj)
+{
+	kobj->sd->mode = (kobj->sd->mode & S_IFMT) | S_IRUSR;
+}
+
 int btrfs_sysfs_add_one_qgroup(struct btrfs_fs_info *fs_info,
 				struct btrfs_qgroup *qgroup)
 {
@@ -2491,6 +2515,7 @@ int btrfs_sysfs_add_one_qgroup(struct btrfs_fs_info *fs_info,
 			btrfs_qgroup_subvolid(qgroup->qgroupid));
 	if (ret < 0)
 		kobject_put(&qgroup->kobj);
+	kobj_dir_ro(&qgroup->kobj);
 
 	return ret;
 }
@@ -2536,6 +2561,7 @@ int btrfs_sysfs_add_qgroups(struct btrfs_fs_info *fs_info)
 				   fsid_kobj, "qgroups");
 	if (ret < 0)
 		goto out;
+	kobj_dir_ro(fs_info->qgroups_kobj);
 
 	rbtree_postorder_for_each_entry_safe(qgroup, next,
 					     &fs_info->qgroup_tree, node) {
