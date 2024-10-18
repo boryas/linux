@@ -215,6 +215,16 @@ static bool can_merge_extent_map(const struct extent_map *em)
 
 	if (em->flags & EXTENT_FLAG_LOGGING)
 		return false;
+	/*
+	 * We can't modify an extent map that is in the tree and that is being
+	 * used by another task, as it can cause that other task to see it in
+	 * inconsistent state during the merging. We always have 1 reference for
+	 * the tree and 1 for this task (which is unpinning the extent map or
+	 * clearing the logging flag), so anything > 2 means it's being used by
+	 * other tasks too.
+	 */
+	if (refcount_read(&em->refs) > 2)
+		return false;
 
 	/*
 	 * We don't want to merge stuff that hasn't been written to the log yet
@@ -333,57 +343,69 @@ static void validate_extent_map(struct btrfs_fs_info *fs_info, struct extent_map
 	}
 }
 
-static void try_merge_map(struct btrfs_inode *inode, struct extent_map *em)
+static int try_merge_one_map(struct btrfs_inode *inode, struct extent_map *em,
+			     struct extent_map *merge, bool prev_merge)
 {
 	struct btrfs_fs_info *fs_info = inode->root->fs_info;
+	struct extent_map *prev;
+	struct extent_map *next;
+
+	if (prev_merge) {
+		prev = merge;
+		next = em;
+	} else {
+		prev = em;
+		next = merge;
+	}
+	/*
+	* Take a refcount for merge so we can maintain a proper
+	* use count across threads for checking mergeability.
+	*/
+	refcount_inc(&merge->refs);
+	if (!can_merge_extent_map(merge))
+		goto no_merge;
+
+	if (!mergeable_maps(prev, next))
+		goto no_merge;
+
+	if (prev_merge)
+		em->start = merge->start;
+	em->len += merge->len;
+	em->generation = max(em->generation, merge->generation);
+	if (em->disk_bytenr < EXTENT_MAP_LAST_BYTE)
+		merge_ondisk_extents(prev, next);
+	em->flags |= EXTENT_FLAG_MERGED;
+
+	validate_extent_map(fs_info, em);
+	refcount_dec(&merge->refs);
+	remove_em(inode, merge);
+	free_extent_map(merge);
+	return 0;
+no_merge:
+	refcount_dec(&merge->refs);
+	return 1;
+}
+
+static void try_merge_map(struct btrfs_inode *inode, struct extent_map *em)
+{
 	struct extent_map *merge = NULL;
 	struct rb_node *rb;
-
-	/*
-	 * We can't modify an extent map that is in the tree and that is being
-	 * used by another task, as it can cause that other task to see it in
-	 * inconsistent state during the merging. We always have 1 reference for
-	 * the tree and 1 for this task (which is unpinning the extent map or
-	 * clearing the logging flag), so anything > 2 means it's being used by
-	 * other tasks too.
-	 */
-	if (refcount_read(&em->refs) > 2)
-		return;
 
 	if (!can_merge_extent_map(em))
 		return;
 
 	if (em->start != 0) {
 		rb = rb_prev(&em->rb_node);
-		if (rb)
+		if (rb) {
 			merge = rb_entry(rb, struct extent_map, rb_node);
-		if (rb && can_merge_extent_map(merge) && mergeable_maps(merge, em)) {
-			em->start = merge->start;
-			em->len += merge->len;
-			em->generation = max(em->generation, merge->generation);
-
-			if (em->disk_bytenr < EXTENT_MAP_LAST_BYTE)
-				merge_ondisk_extents(merge, em);
-			em->flags |= EXTENT_FLAG_MERGED;
-
-			validate_extent_map(fs_info, em);
-			remove_em(inode, merge);
-			free_extent_map(merge);
+			try_merge_one_map(inode, em, merge, true);
 		}
 	}
 
 	rb = rb_next(&em->rb_node);
-	if (rb)
+	if (rb) {
 		merge = rb_entry(rb, struct extent_map, rb_node);
-	if (rb && can_merge_extent_map(merge) && mergeable_maps(em, merge)) {
-		em->len += merge->len;
-		if (em->disk_bytenr < EXTENT_MAP_LAST_BYTE)
-			merge_ondisk_extents(em, merge);
-		validate_extent_map(fs_info, em);
-		em->generation = max(em->generation, merge->generation);
-		em->flags |= EXTENT_FLAG_MERGED;
-		remove_em(inode, merge);
-		free_extent_map(merge);
+		try_merge_one_map(inode, em, merge, false);
 	}
 }
 
