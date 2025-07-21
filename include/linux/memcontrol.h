@@ -266,6 +266,8 @@ struct mem_cgroup {
 
 	struct memcg_vmstats_percpu __percpu *vmstats_percpu;
 
+	struct semaphore reclaim_throttle;
+
 #ifdef CONFIG_CGROUP_WRITEBACK
 	struct list_head cgwb_list;
 	struct wb_domain cgwb_domain;
