@@ -5851,29 +5851,27 @@ fail:
 	return ret;
 }
 
-int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
+struct cgroup *cgroup_mkdir_kernel_special_garbage(struct kernfs_node *parent_kn, const char *name, umode_t mode)
 {
 	struct cgroup *parent, *cgrp;
-	int ret;
+	int err;
 
 	/* do not accept '\n' to prevent making /proc/<pid>/cgroup unparsable */
 	if (strchr(name, '\n'))
-		return -EINVAL;
+		return ERR_PTR(-EINVAL);
 
 	parent = cgroup_kn_lock_live(parent_kn, false);
 	if (!parent)
-		return -ENODEV;
+		return ERR_PTR(-ENODEV);
 
 	if (!cgroup_check_hierarchy_limits(parent)) {
-		ret = -EAGAIN;
+		cgrp = ERR_PTR(-EAGAIN);
 		goto out_unlock;
 	}
 
 	cgrp = cgroup_create(parent, name, mode);
-	if (IS_ERR(cgrp)) {
-		ret = PTR_ERR(cgrp);
+	if (IS_ERR(cgrp))
 		goto out_unlock;
-	}
 
 	/*
 	 * This extra ref will be put in css_free_rwork_fn() and guarantees
@@ -5881,27 +5879,39 @@ int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
 	 */
 	kernfs_get(cgrp->kn);
 
-	ret = css_populate_dir(&cgrp->self);
-	if (ret)
+	err = css_populate_dir(&cgrp->self);
+	if (err) {
+		cgrp = ERR_PTR(err);
 		goto out_destroy;
+	}
 
-	ret = cgroup_apply_control_enable(cgrp);
-	if (ret)
+	err = cgroup_apply_control_enable(cgrp);
+	if (err) {
+		cgrp = ERR_PTR(err);
 		goto out_destroy;
+	}
 
 	TRACE_CGROUP_PATH(mkdir, cgrp);
 
 	/* let's create and online css's */
 	kernfs_activate(cgrp->kn);
 
-	ret = 0;
 	goto out_unlock;
 
 out_destroy:
 	cgroup_destroy_locked(cgrp);
 out_unlock:
 	cgroup_kn_unlock(parent_kn);
-	return ret;
+	return cgrp;
+}
+EXPORT_SYMBOL_GPL(cgroup_mkdir_kernel_special_garbage);
+
+int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
+{
+	struct cgroup *ret = cgroup_mkdir_kernel_special_garbage(parent_kn, name, mode);
+	if (IS_ERR(ret))
+		return PTR_ERR(ret);
+	return 0;
 }
 
 /*
@@ -6084,6 +6094,12 @@ static int cgroup_destroy_locked(struct cgroup *cgrp)
 
 	return 0;
 };
+
+int cgroup_rmdir_kernel_special_garbage(struct kernfs_node *kn)
+{
+	return cgroup_rmdir(kn);
+}
+EXPORT_SYMBOL_GPL(cgroup_rmdir_kernel_special_garbage);
 
 int cgroup_rmdir(struct kernfs_node *kn)
 {

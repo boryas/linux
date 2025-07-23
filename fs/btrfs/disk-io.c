@@ -18,6 +18,10 @@
 #include <linux/crc32c.h>
 #include <linux/sched/mm.h>
 #include <linux/unaligned.h>
+#include <linux/cgroup.h>
+#include <linux/memcontrol.h>
+#include <linux/kernfs.h>
+#include "../kernfs/kernfs-internal.h"
 #include <crypto/hash.h>
 #include "ctree.h"
 #include "disk-io.h"
@@ -3281,6 +3285,24 @@ int btrfs_check_features(struct btrfs_fs_info *fs_info, bool is_rw_mount)
 	return 0;
 }
 
+static int create_btrfs_cgroup(struct btrfs_fs_info *fs_info, char *fsid) {
+	char name[64];
+	struct kernfs_node *cg_root_kn;
+	struct cgroup *cg;
+
+	if (mem_cgroup_disabled())
+		return 0;
+
+	cg_root_kn = get_mem_cgroup_from_mm(NULL)->css.cgroup->kn;
+	snprintf(name, 64, "btrfs-%pU", fsid);
+
+	cg = cgroup_mkdir_kernel_special_garbage(cg_root_kn, name, 0644);
+	if (IS_ERR(cg))
+		return PTR_ERR(cg);
+	fs_info->mem_cgroup = cg;
+	return 0;
+}
+
 int __cold open_ctree(struct super_block *sb, struct btrfs_fs_devices *fs_devices)
 {
 	u32 sectorsize;
@@ -3325,6 +3347,8 @@ int __cold open_ctree(struct super_block *sb, struct btrfs_fs_devices *fs_device
 		ret = PTR_ERR(disk_super);
 		goto fail_alloc;
 	}
+
+	create_btrfs_cgroup(fs_info, disk_super->fsid);
 
 	btrfs_info(fs_info, "first mount of filesystem %pU", disk_super->fsid);
 	/*
@@ -4415,6 +4439,13 @@ void __cold close_ctree(struct btrfs_fs_info *fs_info)
 	warn_about_uncommitted_trans(fs_info);
 
 	clear_bit(BTRFS_FS_OPEN, &fs_info->flags);
+	if (fs_info->mem_cgroup)
+	{
+		struct kernfs_node *kn = fs_info->mem_cgroup->kn;
+		kernfs_get_active(kn);
+		cgroup_rmdir_kernel_special_garbage(kn);
+		kernfs_put_active(kn);
+	}
 	free_root_pointers(fs_info, true);
 	btrfs_free_fs_roots(fs_info);
 

@@ -454,6 +454,7 @@ struct kernfs_node *kernfs_get_active(struct kernfs_node *kn)
 		rwsem_acquire_read(&kn->dep_map, 0, 1, _RET_IP_);
 	return kn;
 }
+EXPORT_SYMBOL_GPL(kernfs_get_active);
 
 /**
  *	kernfs_put_active - put an active reference to kernfs_node
@@ -477,6 +478,7 @@ void kernfs_put_active(struct kernfs_node *kn)
 
 	wake_up_all(&kernfs_root(kn)->deactivate_waitq);
 }
+EXPORT_SYMBOL_GPL(kernfs_put_active);
 
 /**
  * kernfs_drain - drain kernfs_node
