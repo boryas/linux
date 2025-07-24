@@ -241,6 +241,7 @@ enum node_stat_item {
 	NR_HUGETLB,
 #endif
 	NR_BALLOON_PAGES,
+	NR_UNCHARGED_FILE_PAGES,
 	NR_VM_NODE_STAT_ITEMS
 };
 

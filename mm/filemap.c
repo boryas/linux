@@ -10,6 +10,7 @@
  * most "normal" filesystems (but you don't /have/ to use this:
  * the NFS filesystem used to do this differently, for example)
  */
+#include "linux/mmzone.h"
 #include <linux/export.h>
 #include <linux/compiler.h>
 #include <linux/dax.h>
@@ -190,6 +191,9 @@ static void filemap_unaccount_folio(struct address_space *mapping,
 		__lruvec_stat_mod_folio(folio, NR_FILE_THPS, -nr);
 		filemap_nr_thps_dec(mapping);
 	}
+	if (!mem_cgroup_disabled() && !folio_memcg_charged(folio))
+		__lruvec_stat_mod_folio(folio, NR_UNCHARGED_FILE_PAGES, -nr);
+
 
 	/*
 	 * At this point folio must be either written or cleaned by
@@ -955,20 +959,15 @@ error:
 }
 ALLOW_ERROR_INJECTION(__filemap_add_folio, ERRNO);
 
-int filemap_add_folio(struct address_space *mapping, struct folio *folio,
-				pgoff_t index, gfp_t gfp)
+int filemap_add_folio_nocharge(struct address_space *mapping, struct folio *folio,
+				pgoff_t index, gfp_t gfp, bool stat)
 {
 	void *shadow = NULL;
 	int ret;
 
-	ret = mem_cgroup_charge(folio, NULL, gfp);
-	if (ret)
-		return ret;
-
 	__folio_set_locked(folio);
 	ret = __filemap_add_folio(mapping, folio, index, gfp, &shadow);
 	if (unlikely(ret)) {
-		mem_cgroup_uncharge(folio);
 		__folio_clear_locked(folio);
 	} else {
 		/*
@@ -984,6 +983,25 @@ int filemap_add_folio(struct address_space *mapping, struct folio *folio,
 			workingset_refault(folio, shadow);
 		folio_add_lru(folio);
 	}
+	if (!ret && stat)
+		__lruvec_stat_mod_folio(folio, NR_UNCHARGED_FILE_PAGES,
+					folio_nr_pages(folio));
+	return ret;
+}
+EXPORT_SYMBOL_GPL(filemap_add_folio_nocharge);
+
+int filemap_add_folio(struct address_space *mapping, struct folio *folio,
+				pgoff_t index, gfp_t gfp)
+{
+	int ret;
+
+	ret = mem_cgroup_charge(folio, NULL, gfp);
+	if (ret)
+		return ret;
+
+	ret = filemap_add_folio_nocharge(mapping, folio, index, gfp, false);
+	if (ret)
+		mem_cgroup_uncharge(folio);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(filemap_add_folio);

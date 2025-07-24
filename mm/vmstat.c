@@ -1281,6 +1281,7 @@ const char * const vmstat_text[] = {
 	"nr_hugetlb",
 #endif
 	"nr_balloon_pages",
+	"nr_uncharged_file_pages",
 	/* system-wide enum vm_stat_item counters */
 	"nr_dirty_threshold",
 	"nr_dirty_background_threshold",
