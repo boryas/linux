@@ -146,6 +146,33 @@ static void page_cache_delete(struct address_space *mapping,
 	mapping->nrpages -= nr;
 }
 
+#ifdef CONFIG_MEMCG
+static void filemap_mod_uncharged_vmstat(struct folio *folio, int sign)
+{
+	long nr = folio_nr_pages(folio) * sign;
+
+	if (!folio_memcg(folio))
+		__lruvec_stat_mod_folio(folio, NR_UNCHARGED_FILE_PAGES, nr);
+}
+static void filemap_mod_root_cgroup_vmstat(struct folio *folio, int sign)
+{
+	long nr = folio_nr_pages(folio) * sign;
+
+	if (folio_memcg(folio) == root_mem_cgroup)
+		__lruvec_stat_mod_folio(folio, NR_ROOT_CGROUP_FILE_PAGES, nr);
+}
+#else
+static void filemap_mod_uncharged_cgroup_vmstat(struct folio *folio, int sign)
+{
+	return;
+}
+static void filemap_mod_root_cgroup_vmstat(struct folio *folio, int sign)
+{
+	return;
+}
+#endif
+
+
 static void filemap_unaccount_folio(struct address_space *mapping,
 		struct folio *folio)
 {
@@ -190,6 +217,8 @@ static void filemap_unaccount_folio(struct address_space *mapping,
 		__lruvec_stat_mod_folio(folio, NR_FILE_THPS, -nr);
 		filemap_nr_thps_dec(mapping);
 	}
+	filemap_mod_uncharged_vmstat(folio, -1);
+	filemap_mod_root_cgroup_vmstat(folio, -1);
 
 	/*
 	 * At this point folio must be either written or cleaned by
@@ -978,6 +1007,7 @@ int filemap_add_folio_nocharge(struct address_space *mapping, struct folio *foli
 		if (!(gfp & __GFP_WRITE) && shadow)
 			workingset_refault(folio, shadow);
 		folio_add_lru(folio);
+		filemap_mod_uncharged_vmstat(folio, 1);
 	}
 	return ret;
 }
@@ -995,6 +1025,8 @@ int filemap_add_folio(struct address_space *mapping, struct folio *folio,
 	ret = filemap_add_folio_nocharge(mapping, folio, index, gfp);
 	if (ret)
 		mem_cgroup_uncharge(folio);
+	else
+		filemap_mod_root_cgroup_vmstat(folio, 1);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(filemap_add_folio);
