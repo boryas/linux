@@ -2697,11 +2697,11 @@ static int __cold init_tree_roots(struct btrfs_fs_info *fs_info)
 			 */
 			btrfs_set_super_log_root(sb, 0);
 
-			btrfs_warn(fs_info, "try to load backup roots slot %d", i);
 			ret = read_backup_root(fs_info, i);
 			backup_index = ret;
 			if (ret < 0)
 				return ret;
+			btrfs_warn(fs_info, "try to load backup roots slot %d", backup_index);
 		}
 
 		ret = load_important_roots(fs_info);

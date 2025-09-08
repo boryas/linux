@@ -2216,6 +2216,22 @@ static noinline_for_stack void write_one_eb(struct extent_buffer *eb,
 		wbc_account_cgroup_owner(wbc, folio, range_len);
 		folio_unlock(folio);
 	}
+#ifdef CONFIG_BTRFS_DEBUG
+	/* Skip this extent randomly to simulate faulty writeback controllers */
+	if (btrfs_test_opt(fs_info, SKIP_EXTENT_WRITES) &&
+		fs_info->skip_extent_writes_probability > 0) {
+		u32 random_val = get_random_u32_below(100);
+		if (random_val < fs_info->skip_extent_writes_probability) {
+			btrfs_info(fs_info,
+				"Skipping extent write %llu for fault injection (probability=%u%%)",
+				eb->start, fs_info->skip_extent_writes_probability);
+			btrfs_bio_end_io(bbio, BLK_STS_OK);
+			return;
+		}
+	}
+#endif
+
+
 	btrfs_submit_bbio(bbio, 0);
 }
 

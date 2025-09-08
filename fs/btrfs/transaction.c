@@ -3,6 +3,7 @@
  * Copyright (C) 2007 Oracle.  All rights reserved.
  */
 
+#include "messages.h"
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
@@ -1153,6 +1154,7 @@ int btrfs_write_marked_extents(struct btrfs_fs_info *fs_info,
 			ret = 0;
 			wait_writeback = true;
 		}
+
 		if (!ret)
 			ret = filemap_fdatawrite_range(mapping, start, end);
 		if (!ret && wait_writeback)
@@ -2572,6 +2574,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	 * which can change it.
 	 */
 	cur_trans->state = TRANS_STATE_COMPLETED;
+	if (btrfs_test_opt(fs_info, CRASH_POST_COMMIT))
+		btrfs_handle_fs_error(fs_info, EIO, "Inject failure post commit!");
 	wake_up(&cur_trans->commit_wait);
 	btrfs_trans_state_lockdep_release(fs_info, BTRFS_LOCKDEP_TRANS_COMPLETED);
 

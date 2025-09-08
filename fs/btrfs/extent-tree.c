@@ -2839,8 +2839,11 @@ int btrfs_finish_extent_commit(struct btrfs_trans_handle *trans)
 		struct extent_state *next_state;
 
 		if (btrfs_test_opt(fs_info, DISCARD_SYNC))
+		{
+			printk(KERN_INFO "BO: unpin discard %llu:%llu\n", start, end-start+1);
 			ret = btrfs_discard_extent(fs_info, start,
 						   end + 1 - start, NULL);
+		}
 
 		next_state = btrfs_next_extent_state(unpin, cached_state);
 		btrfs_clear_extent_dirty(unpin, start, end, &cached_state);
