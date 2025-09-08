@@ -1153,10 +1153,27 @@ int btrfs_write_marked_extents(struct btrfs_fs_info *fs_info,
 			ret = 0;
 			wait_writeback = true;
 		}
+
+#ifdef CONFIG_BTRFS_DEBUG
+		/* Skip this extent randomly to simulate faulty writeback controllers */
+		if (btrfs_test_opt(fs_info, SKIP_EXTENT_WRITES) &&
+		    fs_info->skip_extent_writes_probability > 0) {
+			u32 random_val = get_random_u32_below(100);
+			if (random_val < fs_info->skip_extent_writes_probability) {
+				btrfs_debug(fs_info,
+					"Skipping extent write [%llu, %llu] for fault injection (probability=%u%%)",
+					start, end, fs_info->skip_extent_writes_probability);
+				ret = 0;
+				goto skip;
+			}
+		}
+#endif
+
 		if (!ret)
 			ret = filemap_fdatawrite_range(mapping, start, end);
 		if (!ret && wait_writeback)
 			btrfs_btree_wait_writeback_range(fs_info, start, end);
+skip:
 		btrfs_free_extent_state(cached_state);
 		if (ret)
 			break;

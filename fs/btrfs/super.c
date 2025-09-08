@@ -85,6 +85,9 @@ struct btrfs_fs_context {
 	unsigned long long mount_opt;
 	unsigned long compress_type:4;
 	int compress_level;
+#ifdef CONFIG_BTRFS_DEBUG
+	u32 skip_extent_writes_probability;
+#endif
 	refcount_t refs;
 };
 
@@ -135,6 +138,7 @@ enum {
 	Opt_fragment, Opt_fragment_data, Opt_fragment_metadata, Opt_fragment_all,
 	Opt_ref_verify,
 	Opt_ref_tracker,
+	Opt_skip_extent_writes,
 #endif
 	Opt_err,
 };
@@ -258,6 +262,7 @@ static const struct fs_parameter_spec btrfs_fs_parameters[] = {
 	fsparam_enum("fragment", Opt_fragment, btrfs_parameter_fragment),
 	fsparam_flag("ref_tracker", Opt_ref_tracker),
 	fsparam_flag("ref_verify", Opt_ref_verify),
+	fsparam_u32("skip_extent_writes", Opt_skip_extent_writes),
 #endif
 	{}
 };
@@ -638,6 +643,14 @@ static int btrfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		break;
 	case Opt_ref_tracker:
 		btrfs_set_opt(ctx->mount_opt, REF_TRACKER);
+		break;
+	case Opt_skip_extent_writes:
+		if (result.uint_32 > 100) {
+			btrfs_err(NULL, "skip_extent_writes probability must be 0-100");
+			return -EINVAL;
+		}
+		ctx->skip_extent_writes_probability = result.uint_32;
+		btrfs_set_opt(ctx->mount_opt, SKIP_EXTENT_WRITES);
 		break;
 #endif
 	default:
@@ -1146,6 +1159,8 @@ static int btrfs_show_options(struct seq_file *seq, struct dentry *dentry)
 		seq_puts(seq, ",ref_verify");
 	if (btrfs_test_opt(info, REF_TRACKER))
 		seq_puts(seq, ",ref_tracker");
+	if (btrfs_test_opt(info, SKIP_EXTENT_WRITES))
+		seq_printf(seq, ",skip_extent_writes=%u", info->skip_extent_writes_probability);
 	seq_printf(seq, ",subvolid=%llu", btrfs_root_id(BTRFS_I(d_inode(dentry))->root));
 	subvol_name = btrfs_get_subvol_name_from_objectid(info,
 			btrfs_root_id(BTRFS_I(d_inode(dentry))->root));
@@ -1411,6 +1426,9 @@ static void btrfs_ctx_to_info(struct btrfs_fs_info *fs_info, struct btrfs_fs_con
 	fs_info->mount_opt = ctx->mount_opt;
 	fs_info->compress_type = ctx->compress_type;
 	fs_info->compress_level = ctx->compress_level;
+#ifdef CONFIG_BTRFS_DEBUG
+	fs_info->skip_extent_writes_probability = ctx->skip_extent_writes_probability;
+#endif
 }
 
 static void btrfs_info_to_ctx(struct btrfs_fs_info *fs_info, struct btrfs_fs_context *ctx)
@@ -1422,6 +1440,9 @@ static void btrfs_info_to_ctx(struct btrfs_fs_info *fs_info, struct btrfs_fs_con
 	ctx->mount_opt = fs_info->mount_opt;
 	ctx->compress_type = fs_info->compress_type;
 	ctx->compress_level = fs_info->compress_level;
+#ifdef CONFIG_BTRFS_DEBUG
+	ctx->skip_extent_writes_probability = fs_info->skip_extent_writes_probability;
+#endif
 }
 
 #define btrfs_info_if_set(fs_info, old_ctx, opt, fmt, args...)			\

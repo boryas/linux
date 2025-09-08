@@ -246,6 +246,7 @@ enum {
 	BTRFS_MOUNT_IGNOREMETACSUMS		= (1ULL << 31),
 	BTRFS_MOUNT_IGNORESUPERFLAGS		= (1ULL << 32),
 	BTRFS_MOUNT_REF_TRACKER			= (1ULL << 33),
+	BTRFS_MOUNT_SKIP_EXTENT_WRITES		= (1ULL << 34),
 };
 
 /*
@@ -903,6 +904,9 @@ struct btrfs_fs_info {
 
 	spinlock_t eb_leak_lock;
 	struct list_head allocated_ebs;
+
+	/* Skip probability (0-100) for extent writes fault injection */
+	u32 skip_extent_writes_probability;
 #endif
 };
 
