@@ -3347,6 +3347,7 @@ int __cold open_ctree(struct super_block *sb, struct btrfs_fs_devices *fs_device
 	 * the whole block of INFO_SIZE
 	 */
 	memcpy(fs_info->super_copy, disk_super, sizeof(*fs_info->super_copy));
+	memcpy(fs_info->super_backup, disk_super, sizeof(*fs_info->super_backup));
 	btrfs_release_disk_super(disk_super);
 
 	disk_super = fs_info->super_copy;
@@ -3735,6 +3736,9 @@ static int write_dev_supers(struct btrfs_device *device,
 		struct btrfs_super_block *disk_super;
 		size_t offset;
 
+		if (i)
+			sb = fs_info->super_backup;
+
 		bytenr_orig = btrfs_sb_offset(i);
 		ret = btrfs_sb_log_location(device, i, WRITE, &bytenr);
 		if (ret == -ENOENT) {
@@ -4089,6 +4093,8 @@ int write_all_supers(struct btrfs_fs_info *fs_info, int max_mirrors)
 		if (ret)
 			total_errors++;
 	}
+
+	memcpy(fs_info->super_backup, sb, sizeof(*fs_info->super_backup));
 	mutex_unlock(&fs_info->fs_devices->device_list_mutex);
 	if (total_errors > max_errors) {
 		btrfs_handle_fs_error(fs_info, -EIO,
