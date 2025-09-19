@@ -2840,7 +2840,7 @@ int btrfs_finish_extent_commit(struct btrfs_trans_handle *trans)
 
 		if (btrfs_test_opt(fs_info, DISCARD_SYNC))
 		{
-			printk(KERN_INFO "BO: unpin discard %llu:%llu\n", start, end-start+1);
+			//printk(KERN_INFO "BO: unpin discard %llu:%llu\n", start, end-start+1);
 			ret = btrfs_discard_extent(fs_info, start,
 						   end + 1 - start, NULL);
 		}

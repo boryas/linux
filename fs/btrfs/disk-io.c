@@ -2534,8 +2534,8 @@ int btrfs_validate_super(const struct btrfs_fs_info *fs_info,
 
 	if (mirror_num >= 0 &&
 	    btrfs_super_bytenr(sb) != btrfs_sb_offset(mirror_num)) {
-		btrfs_err(fs_info, "super offset mismatch %llu != %u",
-			  btrfs_super_bytenr(sb), BTRFS_SUPER_INFO_OFFSET);
+		btrfs_err(fs_info, "super offset mismatch mirror %d %llu != %llu", mirror_num,
+			  btrfs_super_bytenr(sb), btrfs_sb_offset(mirror_num));
 		ret = -EINVAL;
 	}
 
@@ -2587,9 +2587,9 @@ int btrfs_validate_super(const struct btrfs_fs_info *fs_info,
  * Some checks already done early at mount time, like csum type and incompat
  * flags will be skipped.
  */
-static int btrfs_validate_mount_super(struct btrfs_fs_info *fs_info)
+static int btrfs_validate_mount_super(struct btrfs_fs_info *fs_info, int super_id)
 {
-	return btrfs_validate_super(fs_info, fs_info->super_copy, 0);
+	return btrfs_validate_super(fs_info, fs_info->super_copy, super_id);
 }
 
 /*
@@ -3264,7 +3264,7 @@ int btrfs_check_features(struct btrfs_fs_info *fs_info, bool is_rw_mount)
 	return 0;
 }
 
-int __cold open_ctree(struct super_block *sb, struct btrfs_fs_devices *fs_devices)
+int __cold open_ctree(struct super_block *sb, struct btrfs_fs_devices *fs_devices, int super_id)
 {
 	u32 sectorsize;
 	u32 nodesize;
@@ -3299,17 +3299,16 @@ int __cold open_ctree(struct super_block *sb, struct btrfs_fs_devices *fs_device
 		goto fail;
 
 	invalidate_bdev(fs_devices->latest_dev->bdev);
-
 	/*
 	 * Read super block and check the signature bytes only
 	 */
-	disk_super = btrfs_read_disk_super(fs_devices->latest_dev->bdev, 0, false);
+	disk_super = btrfs_read_disk_super(fs_devices->latest_dev->bdev, super_id, false);
 	if (IS_ERR(disk_super)) {
 		ret = PTR_ERR(disk_super);
 		goto fail_alloc;
 	}
 
-	btrfs_info(fs_info, "first mount of filesystem %pU", disk_super->fsid);
+	btrfs_info(fs_info, "first mount of filesystem %pU (super id %d)", disk_super->fsid, super_id);
 	/*
 	 * Verify the type first, if that or the checksum value are
 	 * corrupted, we'll find out
@@ -3355,7 +3354,7 @@ int __cold open_ctree(struct super_block *sb, struct btrfs_fs_devices *fs_device
 	memcpy(fs_info->super_for_commit, fs_info->super_copy,
 	       sizeof(*fs_info->super_for_commit));
 
-	ret = btrfs_validate_mount_super(fs_info);
+	ret = btrfs_validate_mount_super(fs_info, super_id);
 	if (ret) {
 		btrfs_err(fs_info, "superblock contains fatal errors");
 		ret = -EINVAL;
@@ -3669,6 +3668,7 @@ fail_alloc:
 	btrfs_mapping_tree_free(fs_info);
 
 	iput(fs_info->btree_inode);
+
 fail:
 	ASSERT(ret < 0);
 	return ret;

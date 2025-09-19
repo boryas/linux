@@ -1350,8 +1350,10 @@ struct btrfs_super_block *btrfs_read_disk_super(struct block_device *bdev,
 		return ERR_PTR(ret);
 	}
 
-	if (bytenr + BTRFS_SUPER_INFO_SIZE >= bdev_nr_bytes(bdev))
+	if (bytenr + BTRFS_SUPER_INFO_SIZE >= bdev_nr_bytes(bdev)) {
+		printk(KERN_INFO "BO: no room for super mirror %d: super start %llu super end %llu len %d disk end %llu\n", copy_num, bytenr, bytenr+BTRFS_SUPER_INFO_SIZE, BTRFS_SUPER_INFO_SIZE, bdev_nr_bytes(bdev));
 		return ERR_PTR(-EINVAL);
+	}
 
 	if (drop_cache) {
 		/* This should only be called with the primary sb. */
@@ -1449,7 +1451,8 @@ static bool btrfs_skip_registration(struct btrfs_super_block *disk_super,
  * in both cases.
  */
 struct btrfs_device *btrfs_scan_one_device(const char *path,
-					   bool mount_arg_dev)
+					   bool mount_arg_dev,
+					   int super_id)
 {
 	struct btrfs_super_block *disk_super;
 	bool new_device_added = false;
@@ -1459,6 +1462,7 @@ struct btrfs_device *btrfs_scan_one_device(const char *path,
 
 	lockdep_assert_held(&uuid_mutex);
 
+	printk(KERN_INFO "BO: scan_one_device %s %d\n", path, super_id);
 	/*
 	 * Avoid an exclusive open here, as the systemd-udev may initiate the
 	 * device scan which may race with the user's mount or mkfs command,
@@ -1471,10 +1475,14 @@ struct btrfs_device *btrfs_scan_one_device(const char *path,
 	 */
 	bdev_file = bdev_file_open_by_path(path, BLK_OPEN_READ, NULL, NULL);
 	if (IS_ERR(bdev_file))
+	{
+		printk(KERN_INFO "BO: scan one dev err bdev file open 1 %ld\n", PTR_ERR(bdev_file));
 		return ERR_CAST(bdev_file);
+	}
 
-	disk_super = btrfs_read_disk_super(file_bdev(bdev_file), 0, false);
+	disk_super = btrfs_read_disk_super(file_bdev(bdev_file), super_id, false);
 	if (IS_ERR(disk_super)) {
+		printk(KERN_INFO "BO: scan one dev err read disk super 2 %ld\n", PTR_ERR(disk_super));
 		device = ERR_CAST(disk_super);
 		goto error_bdev_put;
 	}
@@ -1486,6 +1494,7 @@ struct btrfs_device *btrfs_scan_one_device(const char *path,
 
 		btrfs_free_stale_devices(devt, NULL);
 
+		printk(KERN_INFO "BO: scan one dev NULL skip reg 3\n");
 		device = NULL;
 		goto free_disk_super;
 	}

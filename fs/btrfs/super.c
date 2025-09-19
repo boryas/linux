@@ -3,6 +3,7 @@
  * Copyright (C) 2007 Oracle.  All rights reserved.
  */
 
+#include "linux/fs_context.h"
 #include <linux/blkdev.h>
 #include <linux/module.h>
 #include <linux/fs.h>
@@ -371,7 +372,7 @@ static int btrfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		struct btrfs_device *device;
 
 		mutex_lock(&uuid_mutex);
-		device = btrfs_scan_one_device(param->string, false);
+		device = btrfs_scan_one_device(param->string, false, 0);
 		mutex_unlock(&uuid_mutex);
 		if (IS_ERR(device))
 			return PTR_ERR(device);
@@ -970,7 +971,8 @@ static int get_default_subvol_objectid(struct btrfs_fs_info *fs_info, u64 *objec
 }
 
 static int btrfs_fill_super(struct super_block *sb,
-			    struct btrfs_fs_devices *fs_devices)
+			    struct btrfs_fs_devices *fs_devices,
+			    int super_id)
 {
 	struct btrfs_inode *inode;
 	struct btrfs_fs_info *fs_info = btrfs_sb(sb);
@@ -994,9 +996,9 @@ static int btrfs_fill_super(struct super_block *sb,
 		return ret;
 	}
 
-	ret = open_ctree(sb, fs_devices);
+	ret = open_ctree(sb, fs_devices, super_id);
 	if (ret) {
-		btrfs_err(fs_info, "open_ctree failed: %d", ret);
+		btrfs_err(fs_info, "open_ctree super %d failed: %d", super_id, ret);
 		return ret;
 	}
 
@@ -1865,7 +1867,7 @@ static int btrfs_fc_test_super(struct super_block *sb, struct fs_context *fc)
 	return fs_info->fs_devices == p->fs_devices;
 }
 
-static int btrfs_get_tree_super(struct fs_context *fc)
+static int btrfs_get_tree_super(struct fs_context *fc, int super_id)
 {
 	struct btrfs_fs_info *fs_info = fc->s_fs_info;
 	struct btrfs_fs_context *ctx = fc->fs_private;
@@ -1882,7 +1884,7 @@ static int btrfs_get_tree_super(struct fs_context *fc)
 	 * With 'true' passed to btrfs_scan_one_device() (mount time) we expect
 	 * either a valid device or an error.
 	 */
-	device = btrfs_scan_one_device(fc->source, true);
+	device = btrfs_scan_one_device(fc->source, true, super_id);
 	ASSERT(device != NULL);
 	if (IS_ERR(device)) {
 		mutex_unlock(&uuid_mutex);
@@ -1969,7 +1971,7 @@ static int btrfs_get_tree_super(struct fs_context *fc)
 		bdev = fs_devices->latest_dev->bdev;
 		snprintf(sb->s_id, sizeof(sb->s_id), "%pg", bdev);
 		shrinker_debugfs_rename(sb->s_shrink, "sb-btrfs:%s", sb->s_id);
-		ret = btrfs_fill_super(sb, fs_devices);
+		ret = btrfs_fill_super(sb, fs_devices, super_id);
 		if (ret) {
 			deactivate_locked_super(sb);
 			return ret;
@@ -2072,8 +2074,11 @@ static int btrfs_get_tree_subvol(struct fs_context *fc)
 	struct fs_context *dup_fc;
 	struct dentry *dentry;
 	struct vfsmount *mnt;
+	int super_id = 0;
 	int ret = 0;
 
+again:
+	printk(KERN_INFO "BO: btrfs_get_tree_subvol super_id %d\n", super_id);
 	/*
 	 * Setup a dummy root and fs_info for test/set super.  This is because
 	 * we don't actually fill this stuff out until open_ctree, but we need
@@ -2106,9 +2111,19 @@ static int btrfs_get_tree_subvol(struct fs_context *fc)
 	 */
 	dup_fc->s_fs_info = fs_info;
 
-	ret = btrfs_get_tree_super(dup_fc);
-	if (ret)
+	ret = btrfs_get_tree_super(dup_fc, super_id);
+	if (ret) {
+		printk(KERN_INFO "BO: get_tree_super failed on super_id %d\n", super_id);
+		if (super_id < BTRFS_SUPER_MIRROR_MAX) {
+			super_id++;
+			/* swap back the source ownership before we put the dup */
+			fc->source = dup_fc->source;
+			dup_fc->source = NULL;
+			put_fs_context(dup_fc);
+			goto again;
+		}
 		goto error;
+	}
 
 	ret = btrfs_reconfigure_for_mount(dup_fc);
 	up_write(&dup_fc->root->d_sb->s_umount);
@@ -2271,7 +2286,7 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 		 * Scanning outside of mount can return NULL which would turn
 		 * into 0 error code.
 		 */
-		device = btrfs_scan_one_device(vol->name, false);
+		device = btrfs_scan_one_device(vol->name, false, 0);
 		ret = PTR_ERR_OR_ZERO(device);
 		mutex_unlock(&uuid_mutex);
 		break;
@@ -2289,7 +2304,7 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 		 * Scanning outside of mount can return NULL which would turn
 		 * into 0 error code.
 		 */
-		device = btrfs_scan_one_device(vol->name, false);
+		device = btrfs_scan_one_device(vol->name, false, 0);
 		if (IS_ERR_OR_NULL(device)) {
 			mutex_unlock(&uuid_mutex);
 			ret = PTR_ERR_OR_ZERO(device);
