@@ -3,6 +3,7 @@
  * Copyright (C) 2007 Oracle.  All rights reserved.
  */
 
+#include "linux/btrfs_tree.h"
 #include <linux/err.h>
 #include <linux/uuid.h>
 #include "ctree.h"
@@ -137,6 +138,10 @@ int btrfs_update_root(struct btrfs_trans_handle *trans, struct btrfs_root
 	unsigned long ptr;
 	u32 old_len;
 
+	/*
+	if (btrfs_root_id(root) == BTRFS_ROOT_TREE_OBJECTID)
+		printk(KERN_INFO "BO: %d: update root " BTRFS_KEY_FMT " in tree root\n", current->pid, BTRFS_KEY_FMT_VALUE(key));
+	*/
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;

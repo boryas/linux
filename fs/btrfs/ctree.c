@@ -208,30 +208,70 @@ struct extent_buffer *btrfs_root_node(struct btrfs_root *root)
 	return eb;
 }
 
+void set_dirty_list_linkage(struct btrfs_root *root, struct list_head *head, const char *caller)
+{
+	printk(KERN_INFO "BO: %d: %s: %s root " BTRFS_KEY_FMT " (%px %px) to %px\n", current->pid, caller, __func__, BTRFS_KEY_FMT_VALUE(&root->root_key), root, &root->dirty_list, head);
+	root->dirty_list_linkage = head;
+}
+
+void dump_cowonly_roots(struct btrfs_fs_info *fs_info, const char *caller) {
+	struct btrfs_root *r;
+	int loops = 0;
+	struct list_head *linkage = NULL;
+
+	printk(KERN_INFO "BO: %d: %s: dump dirty roots:\n", current->pid, caller);
+	list_for_each_entry(r, &fs_info->dirty_cowonly_roots, dirty_list) {
+		if (!linkage)
+			linkage = r->dirty_list_linkage;
+		printk(KERN_INFO "BO: %d: %s: dirty root " BTRFS_KEY_FMT " (%px) linkage %px\n", current->pid, caller, BTRFS_KEY_FMT_VALUE(&r->root_key), r, r->dirty_list_linkage);
+		if (linkage != r->dirty_list_linkage)
+		{
+			printk(KERN_INFO "BO: %d: %s: invalid linkage! %px %px\n", current->pid, caller, linkage, r->dirty_list_linkage);
+			break;
+		}
+		loops++;
+		if (loops > 100) {
+			printk(KERN_INFO "BO: %d: %s: dump dirty roots loop suspected\n", current->pid, caller);
+			break;
+		}
+	}
+}
+
 /*
  * Cowonly root (not-shareable trees, everything not subvolume or reloc roots),
  * just get put onto a simple dirty list.  Transaction walks this list to make
  * sure they get properly updated on disk.
  */
-static void add_root_to_dirty_list(struct btrfs_root *root)
+int add_root_to_dirty_list(struct btrfs_root *root)
 {
 	struct btrfs_fs_info *fs_info = root->fs_info;
 
+	printk(KERN_INFO "BO: try to add root " BTRFS_KEY_FMT " (%px) to dirty roots\n", BTRFS_KEY_FMT_VALUE(&root->root_key), root);
+	printk(KERN_INFO "BO: %d: =============PRE ADD=============\n", current->pid);
+	dump_cowonly_roots(fs_info, __func__);
 	if (test_bit(BTRFS_ROOT_DIRTY, &root->state) ||
 	    !test_bit(BTRFS_ROOT_TRACK_DIRTY, &root->state))
-		return;
+		return 1;
 
 	spin_lock(&fs_info->trans_lock);
 	if (!test_and_set_bit(BTRFS_ROOT_DIRTY, &root->state)) {
 		/* Want the extent tree to be the last on the list */
-		if (btrfs_root_id(root) == BTRFS_EXTENT_TREE_OBJECTID)
+		if (btrfs_root_id(root) == BTRFS_EXTENT_TREE_OBJECTID) {
+			set_dirty_list_linkage(root, &fs_info->dirty_cowonly_roots, __func__);
 			list_move_tail(&root->dirty_list,
 				       &fs_info->dirty_cowonly_roots);
+		}
 		else
+		{
+			set_dirty_list_linkage(root, &fs_info->dirty_cowonly_roots, __func__);
 			list_move(&root->dirty_list,
 				  &fs_info->dirty_cowonly_roots);
+		}
 	}
+	dump_cowonly_roots(fs_info, __func__);
+	printk(KERN_INFO "BO: %d: =============POST ADD=============\n", current->pid);
 	spin_unlock(&fs_info->trans_lock);
+	return 0;
 }
 
 /*

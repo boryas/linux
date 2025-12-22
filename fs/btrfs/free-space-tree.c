@@ -1297,6 +1297,7 @@ int btrfs_delete_free_space_tree(struct btrfs_fs_info *fs_info)
 	btrfs_global_root_delete(free_space_root);
 
 	spin_lock(&fs_info->trans_lock);
+	set_dirty_list_linkage(free_space_root, NULL, __func__);
 	list_del(&free_space_root->dirty_list);
 	spin_unlock(&fs_info->trans_lock);
 

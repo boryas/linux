@@ -18,6 +18,7 @@
 #include <uapi/linux/btrfs_tree.h>
 #include "locking.h"
 #include "accessors.h"
+#include "tagged-list.h"
 
 struct extent_buffer;
 struct btrfs_block_rsv;
@@ -219,6 +220,8 @@ struct btrfs_root {
 
 	/* The dirty list is only used by non-shareable roots */
 	struct list_head dirty_list;
+	struct tagged_list_head dirty_list2;
+	struct list_head *dirty_list_linkage;
 
 	struct list_head root_list;
 
@@ -314,6 +317,9 @@ struct btrfs_root {
 #endif
 };
 
+void set_dirty_list_linkage(struct btrfs_root *root, struct list_head *head, const char *caller);
+void dump_cowonly_roots(struct btrfs_fs_info *fs_info, const char *caller);
+int add_root_to_dirty_list(struct btrfs_root *root);
 static inline bool btrfs_root_readonly(const struct btrfs_root *root)
 {
 	/* Byte-swap the constant at compile time, root_item::flags is LE */

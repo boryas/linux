@@ -3,6 +3,7 @@
  * Copyright (C) 2007 Oracle.  All rights reserved.
  */
 
+#include "tagged-list.h"
 #include <linux/fs.h>
 #include <linux/blkdev.h>
 #include <linux/radix-tree.h>
@@ -662,6 +663,7 @@ static struct btrfs_root *btrfs_alloc_root(struct btrfs_fs_info *fs_info,
 	btrfs_init_root_block_rsv(root);
 
 	INIT_LIST_HEAD(&root->dirty_list);
+	INIT_TAGGED_LIST_HEAD(&root->dirty_list2);
 	INIT_LIST_HEAD(&root->root_list);
 	INIT_LIST_HEAD(&root->delalloc_inodes);
 	INIT_LIST_HEAD(&root->delalloc_root);

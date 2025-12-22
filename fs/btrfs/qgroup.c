@@ -1411,6 +1411,7 @@ int btrfs_quota_disable(struct btrfs_fs_info *fs_info)
 	}
 
 	spin_lock(&fs_info->trans_lock);
+	set_dirty_list_linkage(quota_root, NULL, __func__);
 	list_del(&quota_root->dirty_list);
 	spin_unlock(&fs_info->trans_lock);
 
