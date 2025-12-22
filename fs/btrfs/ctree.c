@@ -258,6 +258,7 @@ int add_root_to_dirty_list(struct btrfs_root *root)
 		/* Want the extent tree to be the last on the list */
 		if (btrfs_root_id(root) == BTRFS_EXTENT_TREE_OBJECTID) {
 			set_dirty_list_linkage(root, &fs_info->dirty_cowonly_roots, __func__);
+			tagged_list_move_tail(&root->dirty_list2, &fs_info->dirty_cowonly_roots);
 			list_move_tail(&root->dirty_list,
 				       &fs_info->dirty_cowonly_roots);
 		}
