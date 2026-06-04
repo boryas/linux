@@ -3481,14 +3481,20 @@ finish:
  * will be NULL.
  */
 int btrfs_init_eb_prealloc(struct btrfs_fs_info *fs_info,
-			   struct btrfs_eb_prealloc *pa)
+			   struct btrfs_eb_prealloc *pa, bool nowait)
 {
+	gfp_t gfp = nowait ? GFP_NOWAIT : GFP_NOFS | __GFP_NOFAIL;
 	int ret;
 
 	ASSERT(!pa->eb, "unexpected non-null eb: %p", pa->eb);
 	ASSERT(!pa->bfs, "unexpected non-null bfs: %p", pa->bfs);
+	pa->needs_prealloc = false;
 
-	pa->eb = kmem_cache_zalloc(extent_buffer_cache, GFP_NOFS | __GFP_NOFAIL);
+	pa->eb = kmem_cache_zalloc(extent_buffer_cache, gfp);
+	if (!pa->eb) {
+		ret = -ENOMEM;
+		goto out;
+	}
 	/* alloc_eb_folio_array() needs len; init_extent_buffer() sets it again later. */
 	pa->eb->len = fs_info->nodesize;
 
@@ -3501,7 +3507,7 @@ int btrfs_init_eb_prealloc(struct btrfs_fs_info *fs_info,
 	 */
 	if (btrfs_meta_is_subpage(fs_info)) {
 		pa->bfs = btrfs_alloc_folio_state(fs_info, PAGE_SIZE,
-						  BTRFS_SUBPAGE_METADATA);
+						  BTRFS_SUBPAGE_METADATA, gfp);
 		if (IS_ERR(pa->bfs)) {
 			ret = PTR_ERR(pa->bfs);
 			pa->bfs = NULL;
@@ -3514,7 +3520,7 @@ int btrfs_init_eb_prealloc(struct btrfs_fs_info *fs_info,
 	 * below (added to LRU, served by btree_migrate_folio), so request
 	 * __GFP_MOVABLE so the page allocator places them in MOVABLE pageblocks.
 	 */
-	ret = alloc_eb_folio_array(pa->eb, GFP_NOFS | __GFP_NOFAIL | __GFP_MOVABLE);
+	ret = alloc_eb_folio_array(pa->eb, gfp | __GFP_MOVABLE);
 	if (ret < 0)
 		goto free_bfs;
 
@@ -3526,6 +3532,11 @@ free_bfs:
 free_eb:
 	kmem_cache_free(extent_buffer_cache, pa->eb);
 	pa->eb = NULL;
+out:
+	if (nowait && ret == -ENOMEM) {
+		pa->needs_prealloc = true;
+		ret = -EAGAIN;
+	}
 	return ret;
 }
 
@@ -3582,7 +3593,7 @@ struct extent_buffer *alloc_extent_buffer(struct btrfs_fs_info *fs_info,
 		return eb;
 
 	if (!pa->eb) {
-		ret = btrfs_init_eb_prealloc(fs_info, pa);
+		ret = btrfs_init_eb_prealloc(fs_info, pa, pa->supports_nowait);
 		if (ret)
 			return ERR_PTR(ret);
 	}
