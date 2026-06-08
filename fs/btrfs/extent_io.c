@@ -3002,10 +3002,11 @@ static inline void btrfs_release_extent_buffer(struct extent_buffer *eb)
  * @trans:  transaction handle that will own the inhibitor
  * @eb:      extent buffer to inhibit writeback on
  *
- * Attempt to track this extent buffer in the transaction's inhibited set.  If
- * memory allocation fails, the buffer is simply not tracked. It may be written
- * back and need re-COW, which is the original behavior.  This is acceptable
- * since inhibiting writeback is an optimization.
+ * Attempt to track this extent buffer in the transaction's inhibited set.  We
+ * are called under eb->lock, so probe with GFP_NOWAIT rather than entering
+ * reclaim under the lock.  If the allocation fails, the buffer is simply not
+ * tracked. It may be written back and need re-COW, which is the original
+ * behavior.  This is acceptable since inhibiting writeback is an optimization.
  */
 void btrfs_inhibit_eb_writeback(struct btrfs_trans_handle *trans, struct extent_buffer *eb)
 {
@@ -3021,7 +3022,7 @@ void btrfs_inhibit_eb_writeback(struct btrfs_trans_handle *trans, struct extent_
 	/* Take reference for the xarray entry. */
 	refcount_inc(&eb->refs);
 
-	old = xa_store(&trans->writeback_inhibited_ebs, index, eb, GFP_NOFS);
+	old = xa_store(&trans->writeback_inhibited_ebs, index, eb, GFP_NOWAIT);
 	if (xa_is_err(old)) {
 		/* Allocation failed, just skip inhibiting this buffer. */
 		free_extent_buffer(eb);
