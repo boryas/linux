@@ -31,6 +31,7 @@
 #include <linux/iversion.h>
 #include <linux/swap.h>
 #include <linux/migrate.h>
+#include <linux/rmap.h>
 #include <linux/sched/mm.h>
 #include <linux/iomap.h>
 #include <linux/unaligned.h>
@@ -786,6 +787,14 @@ static int extent_range_clear_dirty_for_io(struct btrfs_inode *inode, u64 start,
 				ret = PTR_ERR(folio);
 			continue;
 		}
+		/*
+		 * Write-protect any shared mmap PTEs before compression reads
+		 * and checksums the folio contents.  Keep the generic dirty
+		 * flag (btrfs_folio_clamp_clear_dirty() below clears the btrfs
+		 * dirty state) so ordered-extent accounting on the invalidate
+		 * path is unaffected.  The folios are locked by the caller.
+		 */
+		folio_mkclean(folio);
 		btrfs_folio_clamp_clear_dirty(inode->root->fs_info, folio, start,
 					      end + 1 - start);
 		folio_put(folio);

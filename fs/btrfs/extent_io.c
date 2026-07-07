@@ -6,6 +6,7 @@
 #include <linux/mm.h>
 #include <linux/pagemap.h>
 #include <linux/page-flags.h>
+#include <linux/rmap.h>
 #include <linux/sched/mm.h>
 #include <linux/spinlock.h>
 #include <linux/blkdev.h>
@@ -2590,6 +2591,20 @@ retry:
 				continue;
 			}
 
+			/*
+			 * Write-protect any shared mmap PTEs before writeback can
+			 * checksum and submit the folio.  For large folios btrfs
+			 * splits the dirty range across several bios, and without
+			 * this an mmap write could modify an already-checksummed
+			 * sector before its bio reaches the disk.  Unlike
+			 * folio_clear_dirty_for_io() this keeps the folio dirty
+			 * flag set, so the ordered-extent accounting on the
+			 * truncate/invalidate path (which keys off the dirty flag)
+			 * still works.  The folio is already locked here.
+			 */
+			if (folio_mkclean(folio))
+				folio_mark_dirty(folio);
+
 			ret = extent_writepage(folio, bio_ctrl);
 			if (ret < 0) {
 				done = true;
@@ -2682,8 +2697,17 @@ void extent_write_locked_range(struct inode *inode, const struct folio *locked_f
 		cur_len = cur_end + 1 - cur;
 
 		ASSERT(folio_test_locked(folio));
-		if (pages_dirty && folio != locked_folio)
+		if (pages_dirty && folio != locked_folio) {
 			ASSERT(folio_test_dirty(folio));
+			/*
+			 * Zoned COW writeout submits these additionally-locked
+			 * folios from here.  Write-protect their mmap PTEs
+			 * before extent_writepage_io() can checksum them; keep
+			 * the dirty flag set (submission clears it) so
+			 * ordered-extent accounting stays correct.
+			 */
+			folio_mkclean(folio);
+		}
 
 		/*
 		 * Set the submission bitmap to submit all sectors.
