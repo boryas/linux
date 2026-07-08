@@ -6,6 +6,7 @@
 #include <linux/mm.h>
 #include <linux/pagemap.h>
 #include <linux/page-flags.h>
+#include <linux/rmap.h>
 #include <linux/sched/mm.h>
 #include <linux/spinlock.h>
 #include <linux/blkdev.h>
@@ -1779,6 +1780,22 @@ static noinline_for_stack int extent_writepage_io(struct btrfs_inode *inode,
 	ASSERT(start >= folio_start, "start=%llu folio_start=%llu", start, folio_start);
 	ASSERT(end <= folio_end, "start=%llu len=%u folio_start=%llu folio_size=%zu",
 	       start, len, folio_start, folio_size(folio));
+
+	/*
+	 * Write-protect any shared mmap PTEs before we checksum and submit the
+	 * folio's sectors below.  All data writeback that checksums a folio's own
+	 * bytes funnels through here: the main per-folio path (extent_writepage())
+	 * and the zoned / uncompressed-fallback paths (extent_write_locked_range()).
+	 * The folio is always locked here (see the ASSERT), so a racing mmap store
+	 * faults into btrfs_page_mkwrite() and blocks on the folio lock until this
+	 * writeback completes -- without it, a large folio's later bios could be
+	 * modified after their checksum was computed.  Unlike folio_clear_dirty_for_io()
+	 * this does not clear the dirty flag; the per-block dirty state is cleared at
+	 * submission, so ordered-extent accounting on the truncate/invalidate path
+	 * is unaffected.
+	 */
+	ASSERT(folio_test_locked(folio));
+	folio_mkclean(folio);
 
 	/* Truncate the submit bitmap to the current range. */
 	if (start > folio_start)
